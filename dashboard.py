@@ -213,7 +213,7 @@ def render_scanner() -> Panel:
     content = Table(show_header=True, box=box.SIMPLE_HEAD, expand=True, padding=(0, 1))
     content.add_column("Market", max_width=38)
     content.add_column("Mkt$", justify="right", width=5)
-    content.add_column("Claude", justify="right", width=6, style=ACCENT)
+    content.add_column("Model", justify="right", width=6, style=ACCENT)
     content.add_column("Edge", justify="right", width=6)
     content.add_column("Side", justify="center", width=5)
     content.add_column("Bet", justify="right", width=7)
@@ -221,7 +221,7 @@ def render_scanner() -> Panel:
 
     if not state.latest_markets:
         content.add_row(f"[{DIM}]Waiting for first scan...[/{DIM}]", "", "", "", "", "", "")
-        return Panel(content, title="[bold]MARKET SCANNER[/bold]  ·  Claude Confidence vs Market Odds", border_style="bright_green", box=box.ROUNDED)
+        return Panel(content, title="[bold]MARKET SCANNER[/bold]  ·  Model Confidence vs Market Odds", border_style="bright_green", box=box.ROUNDED)
 
     # Show signals first
     signal_questions = set()
@@ -270,7 +270,7 @@ def render_scanner() -> Panel:
             f"[{DIM}]no edge[/{DIM}]",
         )
 
-    return Panel(content, title="[bold]MARKET SCANNER[/bold]  ·  Claude Confidence vs Market Odds", border_style="bright_green", box=box.ROUNDED)
+    return Panel(content, title="[bold]MARKET SCANNER[/bold]  ·  Model Confidence vs Market Odds", border_style="bright_green", box=box.ROUNDED)
 
 
 def render_trades() -> Panel:
@@ -282,7 +282,7 @@ def render_trades() -> Panel:
     table.add_column("Side", justify="center", width=5)
     table.add_column("Bet", justify="right", width=7)
     table.add_column("Edge", justify="right", width=6)
-    table.add_column("Claude", justify="right", width=6)
+    table.add_column("Model", justify="right", width=6)
     table.add_column("Mkt$", justify="right", width=5)
     table.add_column("Status", justify="center", width=9)
 

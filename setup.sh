@@ -62,35 +62,37 @@ else
     echo -e "${BOLD}Let's configure your API keys.${NC}"
     echo ""
 
-    # Anthropic
-    echo -e "${YELLOW}1. Anthropic API Key${NC} (required — get one at console.anthropic.com)"
-    read -p "   Enter your Anthropic API key: " ANTHROPIC_KEY
+    # OpenAI
+    echo -e "${YELLOW}1. OpenAI API Key${NC} (required — get one at platform.openai.com)"
+    read -s -p "   Enter your OpenAI API key: " OPENAI_KEY
     echo ""
 
     # Twitter (optional)
     echo -e "${YELLOW}2. Twitter API v2 Bearer Token${NC} (optional — enables real-time news stream)"
-    read -p "   Enter Twitter bearer token (or press Enter to skip): " TWITTER_KEY
+    read -s -p "   Enter Twitter bearer token (or press Enter to skip): " TWITTER_KEY
     echo ""
 
     # Telegram (optional)
     echo -e "${YELLOW}3. Telegram Bot Token${NC} (optional — enables channel monitoring)"
-    read -p "   Enter Telegram bot token (or press Enter to skip): " TELEGRAM_KEY
+    read -s -p "   Enter Telegram bot token (or press Enter to skip): " TELEGRAM_KEY
     TELEGRAM_CHANNELS=""
+    TELEGRAM_ALERT_CHAT=""
     if [ -n "$TELEGRAM_KEY" ]; then
         read -p "   Enter channel IDs (comma-separated, or Enter to skip): " TELEGRAM_CHANNELS
+        read -p "   Enter alert destination chat ID (or Enter to skip): " TELEGRAM_ALERT_CHAT
     fi
     echo ""
 
     # Polymarket (optional)
     echo -e "${YELLOW}4. Polymarket API Credentials${NC} (optional — needed only for live trading)"
-    read -p "   Enter Polymarket API key (or press Enter to skip): " POLY_KEY
+    read -s -p "   Enter Polymarket API key (or press Enter to skip): " POLY_KEY
     POLY_SECRET=""
     POLY_PASS=""
     POLY_PRIV=""
     if [ -n "$POLY_KEY" ]; then
-        read -p "   Enter Polymarket API secret: " POLY_SECRET
-        read -p "   Enter Polymarket API passphrase: " POLY_PASS
-        read -p "   Enter Polymarket private key: " POLY_PRIV
+        read -s -p "   Enter Polymarket API secret: " POLY_SECRET
+        read -s -p "   Enter Polymarket API passphrase: " POLY_PASS
+        read -s -p "   Enter Polymarket private key: " POLY_PRIV
     fi
     echo ""
 
@@ -101,8 +103,9 @@ else
 
     # Write .env
     cat > .env << ENVEOF
-# Anthropic (required)
-ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
+# OpenAI (required)
+OPENAI_API_KEY=${OPENAI_KEY}
+OPENAI_MODEL=gpt-5.4-mini
 
 # Twitter API v2 (optional — real-time news)
 TWITTER_BEARER_TOKEN=${TWITTER_KEY}
@@ -110,12 +113,16 @@ TWITTER_BEARER_TOKEN=${TWITTER_KEY}
 # Telegram (optional — channel monitoring)
 TELEGRAM_BOT_TOKEN=${TELEGRAM_KEY}
 TELEGRAM_CHANNEL_IDS=${TELEGRAM_CHANNELS}
+TELEGRAM_ALERT_CHAT_ID=${TELEGRAM_ALERT_CHAT}
 
 # Polymarket CLOB API (optional — live trading)
 POLYMARKET_API_KEY=${POLY_KEY}
 POLYMARKET_API_SECRET=${POLY_SECRET}
 POLYMARKET_API_PASSPHRASE=${POLY_PASS}
 POLYMARKET_PRIVATE_KEY=${POLY_PRIV}
+POLYMARKET_FUNDER_ADDRESS=
+POLYMARKET_SIGNATURE_TYPE=
+LIVE_TRADING_ACK=
 
 # NewsAPI.org (optional)
 NEWSAPI_KEY=${NEWSAPI}
@@ -124,6 +131,8 @@ NEWSAPI_KEY=${NEWSAPI}
 DRY_RUN=true
 MAX_BET_USD=25
 DAILY_LOSS_LIMIT_USD=100
+MAX_OPEN_EXPOSURE_USD=100
+MAX_SLIPPAGE_BPS=50
 EDGE_THRESHOLD=0.10
 
 # V2 Settings
@@ -131,6 +140,8 @@ MAX_VOLUME_USD=500000
 MIN_VOLUME_USD=1000
 MATERIALITY_THRESHOLD=0.6
 SPEED_TARGET_SECONDS=5
+MAX_NEWS_AGE_SECONDS=300
+LIVE_ALLOWED_NEWS_SOURCES=rss
 ENVEOF
 
     echo -e "${GREEN}✓${NC} .env file created"

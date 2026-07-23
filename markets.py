@@ -20,10 +20,28 @@ class Market:
     end_date: str
     active: bool
     tokens: list[dict]
+    url: str = ""
 
     @property
     def implied_probability(self) -> float:
         return self.yes_price
+
+
+def _build_market_url(data: dict) -> str:
+    """Build the public Polymarket URL from Gamma event and market slugs."""
+    market_slug = str(data.get("slug", "")).strip()
+    events = data.get("events") or []
+    event_slug = ""
+    if isinstance(events, list) and events and isinstance(events[0], dict):
+        event_slug = str(events[0].get("slug", "")).strip()
+
+    if event_slug and market_slug:
+        return f"https://polymarket.com/event/{event_slug}/{market_slug}"
+    if event_slug:
+        return f"https://polymarket.com/event/{event_slug}"
+    if market_slug:
+        return f"https://polymarket.com/event/{market_slug}"
+    return ""
 
 
 def fetch_active_markets(limit: int = 50) -> list[Market]:
@@ -111,6 +129,7 @@ def fetch_active_markets(limit: int = 50) -> list[Market]:
                 end_date=m.get("endDate", m.get("end_date_iso", "")),
                 active=m.get("active", True),
                 tokens=token_list,
+                url=_build_market_url(m),
             ))
         except (KeyError, ValueError, TypeError):
             continue
@@ -160,6 +179,7 @@ def _fetch_from_clob(limit: int) -> list[Market]:
                 end_date=m.get("end_date_iso", m.get("end_date", "")),
                 active=m.get("active", True),
                 tokens=tokens,
+                url=_build_market_url(m),
             ))
         except (KeyError, ValueError):
             continue
@@ -177,6 +197,22 @@ def _infer_category(question: str, tags: list) -> str:
         return "ai"
     if any(kw in combined for kw in ["bitcoin", "ethereum", "crypto", "blockchain", "defi", "token"]):
         return "crypto"
+    if any(kw in combined for kw in [
+        "federal reserve", "fed rate", "interest rate", "inflation", "cpi",
+        "gdp", "unemployment", "recession", "jobs report", "central bank",
+        "tariff",
+    ]):
+        return "economics"
+    if any(kw in combined for kw in [
+        "war", "ceasefire", "sanction", "nato", "taiwan", "ukraine",
+        "russia", "china", "israel", "iran", "gaza",
+    ]):
+        return "geopolitics"
+    if any(kw in combined for kw in [
+        "fda", "vaccine", "pandemic", "disease", "drug approval",
+        "clinical trial", "world health organization",
+    ]):
+        return "health"
     if any(kw in combined for kw in ["election", "president", "congress", "senate", "trump", "biden", "political"]):
         return "politics"
     if any(kw in combined for kw in ["spacex", "nasa", "climate", "research", "study", "discovery"]):

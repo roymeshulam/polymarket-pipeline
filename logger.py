@@ -82,6 +82,15 @@ def init_db():
             resolved_at TEXT,
             UNIQUE(trade_id)
         );
+
+        CREATE TABLE IF NOT EXISTS exposure_reservations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            amount_usd REAL NOT NULL CHECK(amount_usd > 0),
+            status TEXT NOT NULL CHECK(status IN ('reserved', 'posted', 'released')),
+            order_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
     """)
     # Add V2 columns to existing trades table if missing
     _migrate_v2_columns(conn)
@@ -226,6 +235,62 @@ def get_daily_pnl() -> float:
     ).fetchone()
     conn.close()
     return row["spent"]
+
+
+def reserve_exposure(amount_usd: float, daily_limit: float, open_limit: float) -> int | None:
+    """Atomically reserve live USD exposure, or return None when a cap is hit."""
+    if amount_usd <= 0:
+        return None
+    conn = _conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        daily = conn.execute(
+            """SELECT COALESCE(SUM(amount_usd), 0) AS total
+               FROM exposure_reservations
+               WHERE status IN ('reserved', 'posted') AND created_at LIKE ?""",
+            (f"{today}%",),
+        ).fetchone()["total"]
+        open_exposure = conn.execute(
+            """SELECT COALESCE(SUM(amount_usd), 0) AS total
+               FROM exposure_reservations WHERE status IN ('reserved', 'posted')"""
+        ).fetchone()["total"]
+        if daily + amount_usd > daily_limit or open_exposure + amount_usd > open_limit:
+            conn.rollback()
+            return None
+        cur = conn.execute(
+            "INSERT INTO exposure_reservations (amount_usd, status) VALUES (?, 'reserved')",
+            (amount_usd,),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def update_reservation(reservation_id: int, status: str, order_id: str | None = None) -> None:
+    """Transition a reservation after an order succeeds or fails."""
+    if status not in {"posted", "released"}:
+        raise ValueError("invalid reservation status")
+    conn = _conn()
+    conn.execute(
+        """UPDATE exposure_reservations
+           SET status=?, order_id=?, updated_at=datetime('now')
+           WHERE id=? AND status='reserved'""",
+        (status, order_id, reservation_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_open_exposure() -> float:
+    conn = _conn()
+    row = conn.execute(
+        """SELECT COALESCE(SUM(amount_usd), 0) AS total
+           FROM exposure_reservations WHERE status IN ('reserved', 'posted')"""
+    ).fetchone()
+    conn.close()
+    return float(row["total"])
 
 
 def get_recent_trades(limit: int = 20) -> list[dict]:

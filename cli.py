@@ -19,12 +19,25 @@ Usage:
 """
 
 import argparse
+import logging
 import sys
 
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 console = Console()
+
+
+def _configure_logging() -> None:
+    """Prefix application log records with the local date and time."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def cmd_watch(args):
@@ -33,6 +46,7 @@ def cmd_watch(args):
     from pipeline import run_pipeline_v2
 
     if args.live:
+        _confirm_live_trading()
         config.DRY_RUN = False
         console.print("[red bold]LIVE TRADING ENABLED[/red bold]\n")
     else:
@@ -50,6 +64,7 @@ def cmd_run(args):
     from pipeline import run_pipeline
 
     if args.live:
+        _confirm_live_trading()
         config.DRY_RUN = False
         console.print("[red bold]LIVE TRADING ENABLED[/red bold]\n")
     else:
@@ -62,6 +77,27 @@ def cmd_run(args):
         max_markets=args.max,
         lookback_hours=args.hours,
     )
+
+
+def _confirm_live_trading():
+    """Fail closed unless configuration and an interactive wallet check pass."""
+    import config
+    from executor import validate_live_configuration
+
+    errors = validate_live_configuration()
+    if errors:
+        console.print("[red bold]Live trading configuration rejected:[/red bold]")
+        for error in errors:
+            console.print(f"  [red]- {error}[/red]")
+        raise SystemExit(2)
+    if not sys.stdin.isatty():
+        console.print("[red]Live trading requires an interactive terminal confirmation.[/red]")
+        raise SystemExit(2)
+    expected = config.POLYMARKET_FUNDER_ADDRESS
+    entered = input(f"Type the full funder address ({expected}) to enable live trading: ").strip()
+    if entered.lower() != expected.lower():
+        console.print("[red]Address did not match; live trading remains disabled.[/red]")
+        raise SystemExit(2)
 
 
 def cmd_backtest(args):
@@ -156,7 +192,7 @@ def cmd_verify(args):
 
     # 2. Dependencies
     deps_ok = True
-    for mod in ["anthropic", "feedparser", "httpx", "rich", "dotenv", "websockets", "tweepy", "aiohttp"]:
+    for mod in ["openai", "feedparser", "httpx", "rich", "dotenv", "websockets", "tweepy", "aiohttp"]:
         try:
             __import__(mod)
         except ImportError:
@@ -174,24 +210,27 @@ def cmd_verify(args):
     if not env_exists:
         all_good = False
 
-    # 4. Anthropic API key
+    # 4. OpenAI API key
     import config
-    has_key = bool(config.ANTHROPIC_API_KEY) and config.ANTHROPIC_API_KEY != "sk-ant-..."
+    has_key = bool(config.OPENAI_API_KEY) and config.OPENAI_API_KEY != "sk-..."
     if has_key:
         try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-            client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=10,
-                messages=[{"role": "user", "content": "Say OK"}],
+            from openai import OpenAI
+            client = OpenAI(api_key=config.OPENAI_API_KEY)
+            client.responses.create(
+                model=config.OPENAI_MODEL,
+                max_output_tokens=16,
+                input="Reply with OK",
             )
-            console.print(f"  [bright_green]PASS[/bright_green]  Anthropic API key (verified)")
+            console.print(
+                f"  [bright_green]PASS[/bright_green]  OpenAI API key "
+                f"(verified with {config.OPENAI_MODEL})"
+            )
         except Exception as e:
-            console.print(f"  [red]FAIL[/red]  Anthropic API key — {type(e).__name__}: {e}")
+            console.print(f"  [red]FAIL[/red]  OpenAI API key — {type(e).__name__}: {e}")
             all_good = False
     else:
-        console.print(f"  [red]FAIL[/red]  Anthropic API key not set")
+        console.print(f"  [red]FAIL[/red]  OpenAI API key not set")
         all_good = False
 
     # 5. News scraper (RSS)
@@ -213,6 +252,16 @@ def cmd_verify(args):
     has_telegram = bool(config.TELEGRAM_BOT_TOKEN)
     if has_telegram:
         console.print(f"  [bright_green]PASS[/bright_green]  Telegram bot token set")
+        if config.TELEGRAM_ALERT_CHAT_ID:
+            console.print(
+                "  [bright_green]PASS[/bright_green]  "
+                "Telegram edge-trade alerts configured"
+            )
+        else:
+            console.print(
+                "  [dim]SKIP[/dim]  Telegram edge-trade alerts "
+                "(TELEGRAM_ALERT_CHAT_ID not set)"
+            )
     else:
         console.print(f"  [dim]SKIP[/dim]  Telegram bot (optional — enables channel monitoring)")
 
@@ -235,11 +284,12 @@ def cmd_verify(args):
         console.print(f"  [yellow]WARN[/yellow]  Niche filter — {e}")
 
     # 10. Polymarket trading credentials (optional)
-    has_poly = bool(config.POLYMARKET_API_KEY)
-    if has_poly:
-        console.print(f"  [bright_green]PASS[/bright_green]  Polymarket trading credentials set")
+    from executor import validate_live_configuration
+    live_errors = validate_live_configuration()
+    if not live_errors:
+        console.print(f"  [bright_green]PASS[/bright_green]  Live trading safeguards configured")
     else:
-        console.print(f"  [dim]SKIP[/dim]  Polymarket trading credentials (optional — needed for --live)")
+        console.print(f"  [dim]SKIP[/dim]  Live trading disabled ({len(live_errors)} safeguard checks incomplete)")
 
     # 11. SQLite
     try:
@@ -301,9 +351,17 @@ def cmd_markets(args):
     table.add_column("YES", justify="right")
     table.add_column("NO", justify="right")
     table.add_column("Volume", justify="right")
+    table.add_column("URL", width=11, no_wrap=True)
 
     for m in markets:
-        table.add_row(m.category, m.question[:60], f"{m.yes_price:.2f}", f"{m.no_price:.2f}", f"${m.volume:,.0f}")
+        table.add_row(
+            m.category,
+            m.question[:60],
+            f"{m.yes_price:.2f}",
+            f"{m.no_price:.2f}",
+            f"${m.volume:,.0f}",
+            Text("Open market", style=f"link {m.url}") if m.url else "—",
+        )
 
     console.print(table)
 
@@ -378,6 +436,7 @@ def cmd_stats(args):
 
 
 def main():
+    _configure_logging()
     parser = argparse.ArgumentParser(description="Polymarket Pipeline V2")
     sub = parser.add_subparsers(dest="command")
 

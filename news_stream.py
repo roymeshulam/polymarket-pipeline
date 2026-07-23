@@ -31,7 +31,11 @@ class NewsEvent:
     latency_ms: int = 0  # time from publication to our receipt
 
     def age_seconds(self) -> float:
-        return (datetime.now(timezone.utc) - self.received_at).total_seconds()
+        return max(0.0, (datetime.now(timezone.utc) - self.published_at).total_seconds())
+
+    def is_fresh(self) -> bool:
+        """Whether the source publication time is recent enough to trade."""
+        return self.age_seconds() <= config.MAX_NEWS_AGE_SECONDS
 
 
 class TwitterStream:
@@ -45,6 +49,26 @@ class TwitterStream:
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.bearer_token}"}
+
+    @staticmethod
+    def _rate_limit_delay(response: httpx.Response, fallback: int) -> int:
+        """Return a bounded delay from X rate-limit response headers."""
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                return max(1, min(900, int(float(retry_after))))
+            except ValueError:
+                pass
+
+        reset_at = response.headers.get("x-rate-limit-reset")
+        if reset_at:
+            try:
+                remaining = int(float(reset_at) - time.time()) + 1
+                return max(1, min(900, remaining))
+            except ValueError:
+                pass
+
+        return max(60, min(900, fallback))
 
     async def setup_rules(self):
         """Set up filtered stream rules based on keywords."""
@@ -70,10 +94,10 @@ class TwitterStream:
                     timeout=10,
                 )
 
-            # Create new rules from keywords (max 25 chars per rule for Basic)
+            # Batch keywords into comfortably sized filtered-stream rules.
             rules = []
             # Batch keywords into OR groups
-            batch_size = 5
+            batch_size = 10
             for i in range(0, len(self.keywords), batch_size):
                 batch = self.keywords[i:i + batch_size]
                 value = " OR ".join(f'"{kw}"' for kw in batch)
@@ -83,7 +107,7 @@ class TwitterStream:
                 await client.post(
                     f"{self.base_url}/tweets/search/stream/rules",
                     headers=self._headers(),
-                    json={"add": rules[:5]},  # Basic tier: 5 rules max
+                    json={"add": rules},
                     timeout=10,
                 )
 
@@ -110,6 +134,17 @@ class TwitterStream:
                         params={"tweet.fields": "created_at,author_id,text"},
                         timeout=None,
                     ) as resp:
+                        if resp.status_code == 429:
+                            delay = self._rate_limit_delay(resp, backoff)
+                            log.warning(
+                                "[twitter] Rate limited; reconnecting in %ss",
+                                delay,
+                            )
+                            await asyncio.sleep(delay)
+                            backoff = min(max(backoff * 2, delay), 900)
+                            continue
+
+                        resp.raise_for_status()
                         backoff = 1
                         async for line in resp.aiter_lines():
                             if not line.strip():
@@ -201,7 +236,8 @@ class TelegramMonitor:
                     await queue.put(event)
 
             except Exception as e:
-                log.warning(f"[telegram] Error: {e}")
+                # Never stringify HTTP errors: request URLs contain the bot token.
+                log.warning("[telegram] Request failed: %s", type(e).__name__)
                 await asyncio.sleep(5)
 
 
@@ -267,7 +303,14 @@ class NewsAggregator:
         self.telegram = TelegramMonitor(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHANNEL_IDS)
         self.rss = RSSFallback(interval_seconds=120)
 
-        self.stats = {"twitter": 0, "telegram": 0, "rss": 0, "total": 0, "deduped": 0}
+        self.stats = {
+            "twitter": 0,
+            "telegram": 0,
+            "rss": 0,
+            "total": 0,
+            "deduped": 0,
+            "stale": 0,
+        }
 
     async def run(self):
         """Start all sources and the dedup router."""
@@ -289,6 +332,10 @@ class NewsAggregator:
                 continue
 
             self._seen.add(key)
+            if not event.is_fresh():
+                self.stats["stale"] += 1
+                continue
+
             self.stats[event.source] = self.stats.get(event.source, 0) + 1
             self.stats["total"] += 1
 

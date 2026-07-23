@@ -1,6 +1,6 @@
 """
 News-to-market matching — routes breaking news to relevant active markets.
-Two strategies: fast keyword matching + semantic Claude matching for ambiguous cases.
+Uses fast keyword matching to route relevant news without another model call.
 """
 from __future__ import annotations
 
@@ -79,9 +79,22 @@ def match_news_to_markets_broad(
     category_keywords = {
         "ai": ["ai", "openai", "gpt", "anthropic", "claude", "llm", "chatgpt", "gemini", "artificial intelligence"],
         "crypto": ["bitcoin", "ethereum", "solana", "crypto", "blockchain", "defi", "token", "btc", "eth"],
-        "politics": ["trump", "biden", "congress", "senate", "election", "tariff", "fed", "white house"],
+        "politics": ["trump", "biden", "congress", "senate", "election", "white house"],
         "technology": ["apple", "google", "microsoft", "nvidia", "tech", "software", "startup"],
         "science": ["spacex", "nasa", "climate", "research", "discovery"],
+        "economics": [
+            "federal reserve", "fed rate", "interest rate", "inflation", "cpi",
+            "gdp", "unemployment", "recession", "jobs report", "central bank",
+            "tariff",
+        ],
+        "geopolitics": [
+            "war", "ceasefire", "sanction", "nato", "taiwan", "ukraine",
+            "russia", "china", "israel", "iran", "gaza",
+        ],
+        "health": [
+            "fda", "vaccine", "pandemic", "disease", "drug approval",
+            "clinical trial", "world health organization",
+        ],
     }
 
     matched_categories = set()

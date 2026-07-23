@@ -33,7 +33,7 @@ def detect_edge(
     reasoning: str = "",
     headlines: str = "",
 ) -> Signal | None:
-    """V1: Compare Claude's confidence against market price."""
+    """V1: Compare the model's confidence against market price."""
     market_price = market.yes_price
     edge = claude_score - market_price
 
@@ -73,6 +73,9 @@ def detect_edge_v2(
     - Materiality exceeds threshold
     - Market price has room to move in the predicted direction
     """
+    if not news_event.is_fresh():
+        return None
+
     if classification.direction == "neutral":
         return None
 

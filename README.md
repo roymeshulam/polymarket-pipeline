@@ -7,7 +7,7 @@ Breaking News (Twitter / Telegram / RSS)
         ↓ (< 5 seconds)
 Match to niche markets (< $500K volume)
         ↓
-Claude Classification: bullish / bearish / neutral + materiality
+OpenAI Classification: bullish / bearish / neutral + materiality
         ↓
 Edge detection + quarter-Kelly sizing
         ↓
@@ -16,11 +16,11 @@ Instant execution → SQLite log → calibration tracking
 
 ## What Changed From V1
 
-V1 scraped RSS feeds (5-60 min delay), asked Claude "what's the probability?" (wrong question for LLMs), and competed on high-volume markets (where every bot already operates).
+V1 scraped RSS feeds (5-60 min delay), asked an OpenAI model "what's the probability?" (wrong question for LLMs), and competed on high-volume markets (where every bot already operates).
 
 V2 inverts all three:
 - **Speed**: Real-time Twitter/Telegram streams instead of stale RSS
-- **Classification**: Claude classifies "bullish or bearish?" instead of estimating probability — a task LLMs are actually good at
+- **Classification**: OpenAI classifies "bullish or bearish?" instead of estimating probability — a task LLMs are actually good at
 - **Niche markets**: Only trades markets under $500K volume where the crowd is small and slow
 
 ---
@@ -49,9 +49,11 @@ cp .env.example .env
 Add your keys to `.env`:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...         # Required
+OPENAI_API_KEY=sk-...                # Required
+OPENAI_MODEL=gpt-5.4-mini            # Optional — this is the default
 TWITTER_BEARER_TOKEN=...             # Optional — real-time news stream
 TELEGRAM_BOT_TOKEN=...               # Optional — channel monitoring
+TELEGRAM_ALERT_CHAT_ID=...           # Optional — edge-trade notifications
 POLYMARKET_API_KEY=...               # Optional — live trading only
 ```
 
@@ -75,7 +77,7 @@ python cli.py watch
 python cli.py watch --live
 ```
 
-The `watch` command runs indefinitely. It connects to your configured news sources (Twitter, Telegram, RSS fallback), matches breaking headlines to niche Polymarket markets, classifies each with Claude, and executes trades when it finds edge.
+The `watch` command runs indefinitely. It connects to your configured news sources (Twitter, Telegram, RSS fallback), matches breaking headlines to niche Polymarket markets, classifies each with OpenAI, and executes trades when it finds edge.
 
 ### V1: Synchronous Pipeline
 
@@ -126,7 +128,7 @@ python cli.py backtest --limit 50 --category ai
 ```
 news_stream.py      Real-time news — Twitter API v2, Telegram, RSS fallback
 market_watcher.py   Polymarket WebSocket — live prices, niche filter, momentum
-classifier.py       Claude classification — bullish/bearish/neutral + materiality
+classifier.py       OpenAI classification — bullish/bearish/neutral + materiality
 matcher.py          Routes breaking news to relevant markets
 edge.py             Edge detection + Kelly sizing (V2: classification-based)
 executor.py         Trade execution — dry-run + live CLOB orders (async)
@@ -155,9 +157,9 @@ Real-time streams from Twitter (filtered by keywords: OpenAI, Bitcoin, Fed rate,
 Each headline is matched to active niche markets (<$500K volume) by keyword overlap. Only relevant markets proceed to classification.
 
 ### 3. Classification (The Key Shift)
-Instead of "what's the probability?", Claude is asked: *"Does this news make the market MORE likely to resolve YES, MORE likely to resolve NO, or is it NOT RELEVANT?"*
+Instead of "what's the probability?", the configured OpenAI model is asked: *"Does this news make the market MORE likely to resolve YES, MORE likely to resolve NO, or is it NOT RELEVANT?"*
 
-This is a classification task — something LLMs are genuinely good at. Claude also rates materiality (0-1): how much should this move the price?
+This is a classification task — something LLMs are genuinely good at. The model also rates materiality (0-1): how much should this move the price?
 
 ### 4. Edge Detection
 If direction is bullish/bearish AND materiality exceeds threshold (default 0.6) AND the market price has room to move — that's a signal. Position sizing uses quarter-Kelly.
@@ -189,10 +191,18 @@ Every trade is tracked. As markets resolve, the system measures whether its clas
 
 - Dry-run mode ON by default
 - $25 max single bet, $100 daily limit
+- Live mode requires complete wallet credentials and a typed funder-address confirmation
+- Atomic USD exposure reservations prevent concurrent processes from exceeding configured caps
+- Live orders use fresh executable prices with a configurable slippage ceiling
+- Stale news and news sources not listed in `LIVE_ALLOWED_NEWS_SOURCES` are rejected
 - Quarter-Kelly position sizing
 - Niche market filter prevents competing against sophisticated bots
 - Calibration tracking — auto-detects if strategy accuracy drops
 - All API keys in `.env`, never committed
+
+Live orders are logged as `posted`, not filled. Exposure reservations deliberately
+remain active until order reconciliation is implemented; cancel or reconcile open
+orders before clearing reservations. Never delete `trades.db` while live orders exist.
 
 ---
 

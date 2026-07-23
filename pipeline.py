@@ -13,6 +13,7 @@ import logging
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+from rich.text import Text
 
 import config
 import logger
@@ -25,6 +26,7 @@ from news_stream import NewsAggregator, NewsEvent
 from market_watcher import MarketWatcher
 from matcher import match_news_to_markets
 from classifier import classify_async
+from telegram_alerts import send_trade_alert, send_trade_alert_async
 
 console = Console()
 log = logging.getLogger(__name__)
@@ -125,8 +127,9 @@ class PipelineV2:
             signal: Signal = await self.signal_queue.get()
             result = await execute_trade_async(signal)
             self.stats["trades_executed"] += 1
+            await send_trade_alert_async(signal, result)
 
-            status_color = "bright_green" if result["status"] in ("dry_run", "executed") else "red"
+            status_color = "bright_green" if result["status"] in ("dry_run", "posted") else "red"
             console.print(
                 f"  [{status_color}]{result['status']}[/{status_color}] "
                 f"{result['side']} ${result['amount']:.2f} "
@@ -139,14 +142,18 @@ class PipelineV2:
         while True:
             await asyncio.sleep(30)
             ns = self.news_aggregator.stats
-            console.print(
-                f"\n  [dim]Status: "
-                f"news={self.stats['news_processed']} "
-                f"(tw:{ns.get('twitter', 0)} tg:{ns.get('telegram', 0)} rss:{ns.get('rss', 0)}) "
-                f"matched={self.stats['markets_matched']} "
-                f"signals={self.stats['signals_found']} "
-                f"trades={self.stats['trades_executed']} "
-                f"markets={len(self.market_watcher.tracked_markets)}[/dim]\n"
+            log.info(
+                "Status: news=%s (tw:%s tg:%s rss:%s) stale=%s "
+                "matched=%s signals=%s trades=%s markets=%s",
+                self.stats["news_processed"],
+                ns.get("twitter", 0),
+                ns.get("telegram", 0),
+                ns.get("rss", 0),
+                ns.get("stale", 0),
+                self.stats["markets_matched"],
+                self.stats["signals_found"],
+                self.stats["trades_executed"],
+                len(self.market_watcher.tracked_markets),
             )
 
 
@@ -202,26 +209,30 @@ def run_pipeline(
     console.print(f"\n[bold]3. Scoring {len(markets)} markets against news...[/bold]")
 
     for i, market in enumerate(markets):
-        console.print(f"\n   [{i+1}/{len(markets)}] {market.question[:80]}")
+        heading = Text(f"\n   [{i+1}/{len(markets)}] {market.question[:80]}")
+        if market.url:
+            heading.append("  ")
+            heading.append("Open market", style=f"link {market.url}")
+        console.print(heading)
         console.print(f"   Market price: YES={market.yes_price:.2f} NO={market.no_price:.2f}")
 
         relevant_news = filter_news_for_market(market, news)
         console.print(f"   Relevant headlines: {len(relevant_news)}")
 
         score_result = score_market(market, relevant_news)
-        claude_score = score_result["confidence"]
+        model_score = score_result["confidence"]
         reasoning = score_result["reasoning"]
-        console.print(f"   Claude score: {claude_score:.2f}  (market: {market.yes_price:.2f})")
+        console.print(f"   Model score: {model_score:.2f}  (market: {market.yes_price:.2f})")
 
         headlines_str = "\n".join(n.headline for n in relevant_news[:5])
-        signal = detect_edge(market, claude_score, reasoning, headlines_str)
+        signal = detect_edge(market, model_score, reasoning, headlines_str)
 
         if signal:
             edge_pct = signal.edge * 100
             console.print(f"   [green bold]SIGNAL: {signal.side} | Edge: {edge_pct:.1f}% | Size: ${signal.bet_amount}[/green bold]")
             signals.append(signal)
         else:
-            edge = abs(claude_score - market.yes_price)
+            edge = abs(model_score - market.yes_price)
             console.print(f"   [dim]No edge (diff: {edge:.2f}, threshold: {config.EDGE_THRESHOLD})[/dim]")
 
         time.sleep(0.5)
@@ -232,7 +243,8 @@ def run_pipeline(
         for signal in signals:
             result = execute_trade(signal)
             results.append(result)
-            status_color = "green" if result["status"] in ("dry_run", "executed") else "red"
+            send_trade_alert(signal, result)
+            status_color = "green" if result["status"] in ("dry_run", "posted") else "red"
             console.print(f"   [{status_color}]{result['status']}[/{status_color}] {result['market'][:60]} | {result['side']} ${result['amount']}")
     else:
         console.print("\n[bold]4. No signals — nothing to execute.[/bold]")
