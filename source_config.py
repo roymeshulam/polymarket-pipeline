@@ -50,6 +50,13 @@ class SourceProfile:
             raise ValueError(f"{self.source_id}: enabled RSS source requires url")
         if self.enabled and self.kind == "twitter" and not self.query:
             raise ValueError(f"{self.source_id}: enabled Twitter source requires query")
+        if self.enabled and self.kind == "twitter" and not {
+            "-is:reply",
+            "-is:retweet",
+        }.issubset(self.query.split()):
+            raise ValueError(
+                f"{self.source_id}: Twitter queries must exclude replies and retweets"
+            )
         if self.enabled and self.kind == "telegram" and not self.channel_id:
             raise ValueError(f"{self.source_id}: enabled Telegram source requires channel_id")
         if self.allow_live and self.trust_tier > 2:

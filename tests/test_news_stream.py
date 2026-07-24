@@ -39,6 +39,12 @@ def test_twitter_rate_limit_has_safe_default():
     assert TwitterStream._rate_limit_delay(response, fallback=1) == 60
 
 
+def test_twitter_api_problem_title_exposes_safe_error_name():
+    response = httpx.Response(402, json={"title": "CreditsDepleted"})
+
+    assert TwitterStream._api_problem_title(response) == "CreditsDepleted"
+
+
 def test_corroboration_counts_independent_groups_only():
     aggregator = NewsAggregator(output_queue=None)
     now = datetime.now(timezone.utc)

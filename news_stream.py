@@ -192,6 +192,14 @@ class TwitterStream:
         return {"Authorization": f"Bearer {self.bearer_token}"}
 
     @staticmethod
+    def _api_problem_title(response: httpx.Response) -> str:
+        try:
+            payload = response.json()
+        except (ValueError, json.JSONDecodeError):
+            return "UnknownError"
+        return str(payload.get("title") or payload.get("error") or "UnknownError")
+
+    @staticmethod
     def _rate_limit_delay(response: httpx.Response, fallback: int) -> int:
         retry_after = response.headers.get("retry-after")
         if retry_after:
@@ -283,6 +291,15 @@ class TwitterStream:
                             await asyncio.sleep(delay)
                             backoff = min(max(backoff * 2, delay), 900)
                             continue
+                        if response.status_code in {401, 402, 403}:
+                            await response.aread()
+                            log.error(
+                                "[twitter] Stream unavailable: HTTP %s %s; "
+                                "retry disabled until service restart",
+                                response.status_code,
+                                self._api_problem_title(response),
+                            )
+                            return
                         response.raise_for_status()
                         backoff = 1
                         async for line in response.aiter_lines():

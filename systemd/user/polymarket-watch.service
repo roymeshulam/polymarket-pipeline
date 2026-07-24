@@ -1,0 +1,19 @@
+[Unit]
+Description=Polymarket pipeline watch
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/home/meshulro/Projects/polymarket-pipeline/.env
+
+[Service]
+Type=simple
+WorkingDirectory=/home/meshulro/Projects/polymarket-pipeline
+EnvironmentFile=/home/meshulro/Projects/polymarket-pipeline/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/meshulro/Projects/polymarket-pipeline/.venv/bin/python cli.py watch
+Restart=always
+RestartSec=30
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

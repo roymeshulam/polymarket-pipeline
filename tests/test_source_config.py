@@ -62,3 +62,26 @@ def test_rejects_low_trust_live_source(tmp_path):
 
     with pytest.raises(ValueError, match="trust tiers"):
         load_source_profiles(path)
+
+
+def test_rejects_twitter_query_that_can_include_replies_or_retweets(tmp_path):
+    path = tmp_path / "sources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "sources": [
+                    {
+                        "id": "news_account",
+                        "kind": "twitter",
+                        "name": "News account",
+                        "enabled": True,
+                        "query": "from:NewsAccount",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exclude replies and retweets"):
+        load_source_profiles(path)
