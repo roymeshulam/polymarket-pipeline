@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import config
@@ -44,6 +45,76 @@ CONCEPT_ALIASES: dict[str, tuple[str, ...]] = {
     "trump": ("trump", "טראמפ"),
     "saudi_arabia": ("saudi", "saudi arabia", "סעודיה", "הסעודית"),
     "normalization": ("normalization", "נורמליזציה"),
+    "aviation": (
+        "airspace",
+        "civilian airspace",
+        "commercial aviation",
+        "civil aviation",
+        "airport",
+        "airports",
+        "flight",
+        "flights",
+        "ben gurion",
+        'נתב"ג',
+        "נתבג",
+        "נמל התעופה",
+        "שדה התעופה",
+        "המרחב האווירי",
+        "מרחב אווירי",
+        "תעופה אזרחית",
+        "טיסות",
+        "טיסה",
+        "המראות",
+        "נחיתות",
+    ),
+    "closure": (
+        "close",
+        "closes",
+        "closed",
+        "closure",
+        "shutdown",
+        "shut down",
+        "suspend",
+        "suspended",
+        "suspension",
+        "ground stop",
+        "נסגר",
+        "נסגרה",
+        "סגירה",
+        "סגירת",
+        "סגרה",
+        "הושבת",
+        "הושבתה",
+        "הופסקו ההמראות",
+        "הופסקו הנחיתות",
+        "השעיית טיסות",
+    ),
+}
+
+ENTITY_CONCEPTS = {
+    "israel",
+    "iran",
+    "gaza",
+    "hamas",
+    "hezbollah",
+    "lebanon",
+    "syria",
+    "west_bank",
+    "jerusalem",
+    "netanyahu",
+    "knesset",
+    "united_states",
+    "trump",
+    "saudi_arabia",
+}
+
+PREDICATE_CONCEPTS = set(CONCEPT_ALIASES) - ENTITY_CONCEPTS
+
+# Some resolution domains require specialist or authoritative feeds. A generic
+# Israel source cannot become aviation-capable merely because an article mentions
+# Israel; the source profile must be explicitly reviewed for the domain.
+SOURCE_TOPIC_REQUIREMENTS = {
+    "aviation": "aviation",
 }
 
 STOPWORDS = {
@@ -61,6 +132,8 @@ class MarketMatch:
     market: Market
     score: float
     shared_concepts: tuple[str, ...]
+    shared_entities: tuple[str, ...] = ()
+    shared_predicates: tuple[str, ...] = ()
 
 
 def normalize_text(text: str) -> str:
@@ -122,12 +195,16 @@ def rank_news_to_markets(
     markets: list[Market],
     *,
     source_relevance: float = 1.0,
+    source_topics: Iterable[str] = (),
     max_matches: int = 5,
 ) -> list[MarketMatch]:
-    """Rank candidate markets using bilingual concepts, rules, and keywords."""
+    """Rank candidates that share both an entity and a resolution predicate."""
     event_text = f"{headline} {summary}"
     event_concepts = extract_concepts(event_text)
     event_tokens = set(extract_keywords(event_text))
+    reviewed_source_topics = {
+        normalize_text(topic) for topic in source_topics if str(topic).strip()
+    }
     ranked: list[MarketMatch] = []
 
     for market in markets:
@@ -136,28 +213,43 @@ def rank_news_to_markets(
         )
         market_concepts = extract_concepts(market_text)
         shared = event_concepts & market_concepts
+        shared_entities = shared & ENTITY_CONCEPTS
+        shared_predicates = shared & PREDICATE_CONCEPTS
+
+        required_source_topics = {
+            required_topic
+            for concept, required_topic in SOURCE_TOPIC_REQUIREMENTS.items()
+            if concept in market_concepts
+        }
+        if not required_source_topics <= reviewed_source_topics:
+            continue
 
         market_tokens = set(extract_keywords(market.question))
         token_overlap = event_tokens & market_tokens
-        concept_score = len(shared) / max(2, len(market_concepts))
+        market_entities = market_concepts & ENTITY_CONCEPTS
+        market_predicates = market_concepts & PREDICATE_CONCEPTS
+        entity_score = len(shared_entities) / max(1, len(market_entities))
+        predicate_score = len(shared_predicates) / max(1, len(market_predicates))
         token_score = len(token_overlap) / max(3, len(market_tokens))
 
-        # Entity overlap is necessary for an actionable candidate. Generic action
-        # words such as "strike" or "agreement" cannot create a match by themselves.
-        entity_shared = shared - {
-            "strike", "missile", "drone", "agreement", "release", "military",
-            "cabinet", "resignation", "arrest", "ceasefire", "election",
-        }
-        if not entity_shared and not token_overlap:
+        # Both dimensions are mandatory. "Israel" alone is not evidence for every
+        # Israel market, and "closure" alone does not identify whose closure it is.
+        if not shared_entities or not shared_predicates:
             continue
 
-        score = source_relevance * (0.75 * concept_score + 0.25 * token_score)
+        score = source_relevance * (
+            0.45 * entity_score
+            + 0.45 * predicate_score
+            + 0.10 * token_score
+        )
         if score >= config.MARKET_MATCH_THRESHOLD:
             ranked.append(
                 MarketMatch(
                     market=market,
                     score=score,
                     shared_concepts=tuple(sorted(shared)),
+                    shared_entities=tuple(sorted(shared_entities)),
+                    shared_predicates=tuple(sorted(shared_predicates)),
                 )
             )
 
@@ -171,6 +263,7 @@ def match_news_to_markets(
     max_matches: int = 5,
     summary: str = "",
     source_relevance: float = 1.0,
+    source_topics: Iterable[str] = (),
 ) -> list[Market]:
     """Compatibility wrapper returning only matched markets."""
     return [
@@ -180,6 +273,7 @@ def match_news_to_markets(
             summary,
             markets,
             source_relevance=source_relevance,
+            source_topics=source_topics,
             max_matches=max_matches,
         )
     ]
@@ -190,10 +284,12 @@ def match_news_to_markets_broad(
     summary: str,
     markets: list[Market],
     max_matches: int = 5,
+    source_topics: Iterable[str] = (),
 ) -> list[Market]:
     return match_news_to_markets(
         headline,
         markets,
         max_matches=max_matches,
         summary=summary,
+        source_topics=source_topics,
     )

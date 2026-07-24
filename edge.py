@@ -34,40 +34,6 @@ class Signal:
     news_age_seconds: float = 0.0
 
 
-def detect_edge(
-    market: Market,
-    claude_score: float,
-    reasoning: str = "",
-    headlines: str = "",
-) -> Signal | None:
-    """V1: Compare the model's confidence against market price."""
-    market_price = market.yes_price
-    edge = claude_score - market_price
-
-    if abs(edge) < config.EDGE_THRESHOLD:
-        return None
-
-    if edge > 0:
-        side = "YES"
-        raw_edge = edge
-    else:
-        side = "NO"
-        raw_edge = abs(edge)
-
-    bet_amount = size_position(raw_edge)
-
-    return Signal(
-        market=market,
-        claude_score=claude_score,
-        market_price=market_price,
-        edge=raw_edge,
-        side=side,
-        bet_amount=bet_amount,
-        reasoning=reasoning,
-        headlines=headlines,
-    )
-
-
 def detect_edge_v2(
     market: Market,
     classification: Classification,

@@ -5,8 +5,8 @@ Polymarket Pipeline — CLI Interface
 Usage:
     python cli.py watch                # V2: Event-driven pipeline (real-time news → classify → trade)
     python cli.py watch --live         # V2: With live trading
-    python cli.py run                  # V1: Synchronous pipeline (RSS → score → trade)
-    python cli.py run --live           # V1: With live trading
+    python cli.py run                  # One synchronous event-aware scan
+    python cli.py run --live           # Synchronous scan with live trading
     python cli.py dashboard            # Launch live terminal dashboard
     python cli.py backtest             # Backtest V2 strategy against resolved markets
     python cli.py calibrate            # Show classification accuracy report
@@ -72,7 +72,7 @@ def cmd_watch(args):
 
 
 def cmd_run(args):
-    """V1: Synchronous pipeline — RSS → score → trade."""
+    """Run one synchronous resolution-aware event scan."""
     import config
     from pipeline import run_pipeline
 
@@ -335,7 +335,7 @@ def cmd_verify(args):
             "[bright_green bold]ALL CHECKS PASSED[/bright_green bold]\n\n"
             "You're ready to go. Run:\n"
             "  python cli.py watch             # V2: Event-driven pipeline\n"
-            "  python cli.py run               # V1: Synchronous pipeline\n"
+            "  python cli.py run               # Synchronous event-aware scan\n"
             "  python cli.py dashboard          # Live terminal dashboard\n"
             "  python cli.py backtest           # Validate strategy\n"
             "  python cli.py watch --live       # Real trading (careful!)",
@@ -475,8 +475,11 @@ def main():
     p_watch.add_argument("--threshold", type=float, default=None, help="Materiality threshold override")
     p_watch.set_defaults(func=cmd_watch)
 
-    # run (V1)
-    p_run = sub.add_parser("run", help="V1: Synchronous pipeline (RSS-based)")
+    # run (one synchronous pass through the same event-analysis policy)
+    p_run = sub.add_parser(
+        "run",
+        help="One synchronous resolution-aware scan",
+    )
     p_run.add_argument("--live", action="store_true", help="Enable live trading")
     p_run.add_argument("--max", type=int, default=10, help="Max markets to scan")
     p_run.add_argument("--hours", type=int, default=6, help="News lookback hours")

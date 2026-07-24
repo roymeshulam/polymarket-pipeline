@@ -14,8 +14,9 @@ log = logging.getLogger(__name__)
 def _alert_payload(signal: Signal, result: dict) -> dict:
     """Build a Telegram signal notification with a direct market button."""
     mode = "SIMULATED" if result["status"] == "dry_run" else "LIVE"
-    source = signal.news_source or "rss"
-    classification = signal.classification or signal.side.lower()
+    source = signal.source_id or signal.news_source or "unknown"
+    classification = signal.classification or "unknown"
+    relation = signal.relation_level or "unknown"
     text = (
         f"🚨 {mode} EDGE TRADE\n\n"
         f"{signal.market.question}\n\n"
@@ -27,7 +28,10 @@ def _alert_payload(signal: Signal, result: dict) -> dict:
         f"Amount: ${signal.bet_amount:.2f}\n"
         f"Status: {result['status']}\n"
         f"Source: {source}\n"
-        f"Headline: {signal.headlines[:500] or '—'}\n"
+        f"Relation: {relation}\n"
+        f"Confirmations: {signal.confirmation_count}/"
+        f"{signal.required_confirmations}\n"
+        f"Selected headline: {signal.headlines[:500] or '—'}\n"
         f"Reasoning: {signal.reasoning[:500] or '—'}"
     )
     payload: dict = {

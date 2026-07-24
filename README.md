@@ -9,9 +9,9 @@ Hebrew RSS / reviewed X accounts / reviewed Telegram channels
         ↓
 Per-source freshness, trust, relevance, and confirmation policy
         ↓
-Hebrew normalization + canonical event/entity extraction
+Hebrew normalization + canonical entity/predicate extraction
         ↓
-Match against market question + full resolution rules
+Entity + resolution-predicate match with source-topic routing
         ↓
 Resolution evidence / probability evidence / topical / irrelevant
         ↓
@@ -118,7 +118,7 @@ Policy fields:
 | `trust_tier` | `1` official through `5` unverified |
 | `min_confirmations` | Independent source IDs required |
 | `allow_live` | Source-level live permission; keep false while evaluating |
-| `topics` | Editorial scope for review and future routing |
+| `topics` | Enforced source capability tags used for market routing |
 
 An enabled Telegram source needs its numeric `channel_id`. A Telegram bot only
 receives channel posts when it has been added to that channel with suitable
@@ -134,19 +134,33 @@ top-volume markets. Customize the comma-separated search set when needed:
 MARKET_SEARCH_QUERIES=Israel,Netanyahu,Gaza,Hamas,Hezbollah,Iran
 ```
 
+Matching is fail-closed: a report and market must share both a named entity and
+a resolution predicate. Specialist domains add another source capability gate.
+For example, an airspace market is considered only for profiles explicitly tagged
+with `"aviation"`. The disabled `official_aviation_rss` profile is a placeholder
+for such a reviewed feed; the general Ynet profile is intentionally not tagged
+for aviation.
+
+Events that do not meet their source's `min_confirmations` policy are suppressed,
+not merely labeled. With the default Ynet-only configuration, this means the
+pipeline can ingest headlines for inspection but will produce no classified
+signals until an independent source corroborates an event.
+
 ## Run
 
 ```bash
 python cli.py watch
+python cli.py run --max 15 --hours 1
 python cli.py scrape --hours 1
 python cli.py markets --max 100
 python cli.py dashboard
 python cli.py backtest --limit 50
 ```
 
-`watch` is the recommended path. `run` remains available for synchronous
-experiments, but the event-driven path contains the source-policy and
-corroboration controls.
+`watch` is the recommended continuous path. `run` performs one synchronous pass
+through the same event-level matcher, classifier, source-policy, corroboration,
+and edge controls. Neither path infers a NO signal from the absence of a relevant
+headline.
 
 ## Live trading
 

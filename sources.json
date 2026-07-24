@@ -17,10 +17,10 @@
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security"]
     },
     {
-      "id": "official_israel_rss",
+      "id": "official_aviation_rss",
       "kind": "rss",
-      "name": "Official Israeli RSS placeholder",
-      "independence_group": "official_israel",
+      "name": "Official Israeli aviation RSS placeholder",
+      "independence_group": "official_aviation",
       "enabled": false,
       "language": "he",
       "url": "",
@@ -30,7 +30,7 @@
       "trust_tier": 1,
       "min_confirmations": 1,
       "allow_live": false,
-      "topics": ["israel", "official"]
+      "topics": ["israel", "aviation", "official"]
     },
     {
       "id": "idf_x",

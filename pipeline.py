@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-Polymarket Pipeline — V1 (synchronous) and V2 (async event-driven).
-V1: Scrape → Score → Edge → Trade (loop-based)
-V2: News stream → Match → Classify → Edge → Trade (event-driven)
+Polymarket Pipeline — synchronous and asynchronous event-driven workflows.
+Both paths use: News event → predicate match → classify → edge → trade.
 """
 from __future__ import annotations
 
 import asyncio
-import time
 import logging
 
 from rich.console import Console
@@ -19,13 +17,16 @@ import config
 import logger
 from scraper import scrape_all
 from markets import fetch_target_markets, filter_by_categories
-from scorer import score_market, filter_news_for_market
-from edge import detect_edge, detect_edge_v2, Signal
+from edge import detect_edge_v2, Signal
 from executor import execute_trade, execute_trade_async
-from news_stream import NewsAggregator, NewsEvent
+from news_stream import (
+    NewsAggregator,
+    NewsEvent,
+    confirmed_events_from_news_items,
+)
 from market_watcher import MarketWatcher
 from matcher import match_news_to_markets
-from classifier import classify_event_async
+from classifier import classify_event, classify_event_async
 from telegram_alerts import send_trade_alert, send_trade_alert_async
 
 console = Console()
@@ -94,6 +95,7 @@ class PipelineV2:
                 self.market_watcher.tracked_markets,
                 summary=event.summary,
                 source_relevance=event.relevance,
+                source_topics=event.topics,
             )
 
             if not matched:
@@ -171,7 +173,7 @@ def run_pipeline_v2():
 
 
 # ============================================================
-# V1: Synchronous Loop Pipeline (preserved for backward compat)
+# Synchronous event pipeline
 # ============================================================
 
 def run_pipeline(
@@ -179,14 +181,14 @@ def run_pipeline(
     lookback_hours: int | None = None,
     categories: list[str] | None = None,
 ) -> list[dict]:
-    """V1: Run the full pipeline once. Returns list of trade results."""
+    """Run one resolution-aware event scan and return trade results."""
 
     run_id = logger.log_run_start()
     results = []
     signals: list[Signal] = []
 
     mode = "[yellow]DRY RUN[/yellow]" if config.DRY_RUN else "[red bold]LIVE[/red bold]"
-    console.print(Panel(f"Pipeline V1 Run #{run_id}  |  Mode: {mode}", style="cyan"))
+    console.print(Panel(f"Pipeline Run #{run_id}  |  Mode: {mode}", style="cyan"))
 
     # Step 1: Scrape News
     console.print("\n[bold]1. Scraping news...[/bold]")
@@ -196,6 +198,19 @@ def run_pipeline(
     if not news:
         console.print("[yellow]   No news found. Aborting run.[/yellow]")
         logger.log_run_end(run_id, 0, 0, 0, "no_news")
+        return results
+
+    events = confirmed_events_from_news_items(news)
+    suppressed = len(news) - len(events)
+    console.print(
+        f"   Confirmed events: {len(events)} "
+        f"([dim]{suppressed} suppressed by source policy[/dim])"
+    )
+    if not events:
+        console.print(
+            "[yellow]   No independently confirmed events. Aborting run.[/yellow]"
+        )
+        logger.log_run_end(run_id, 0, 0, 0, "no_confirmed_news")
         return results
 
     # Step 2: Fetch Markets
@@ -209,37 +224,74 @@ def run_pipeline(
         logger.log_run_end(run_id, 0, 0, 0, "no_markets")
         return results
 
-    # Step 3: Score Each Market
-    console.print(f"\n[bold]3. Scoring {len(markets)} markets against news...[/bold]")
+    # Step 3: Match and classify each confirmed event independently.
+    console.print(
+        f"\n[bold]3. Matching {len(events)} confirmed events "
+        f"to {len(markets)} markets...[/bold]"
+    )
 
-    for i, market in enumerate(markets):
-        heading = Text(f"\n   [{i+1}/{len(markets)}] {market.question[:80]}")
-        if market.url:
-            heading.append("  ")
-            heading.append("Open market", style=f"link {market.url}")
-        console.print(heading)
-        console.print(f"   Market price: YES={market.yes_price:.2f} NO={market.no_price:.2f}")
+    for event_index, event in enumerate(events, start=1):
+        console.print(
+            f"\n   [cyan][{event_index}/{len(events)}][/cyan] "
+            f"[{event.source_id}] {event.headline[:120]}"
+        )
+        logger.log_news_event(
+            headline=event.headline,
+            source=event.source_id or event.source,
+            received_at=event.received_at.isoformat(),
+            latency_ms=event.latency_ms,
+        )
+        matched_markets = match_news_to_markets(
+            event.headline,
+            markets,
+            summary=event.summary,
+            source_relevance=event.relevance,
+            source_topics=event.topics,
+        )
+        if not matched_markets:
+            console.print(
+                "   [dim]No market shares both an entity and a "
+                "resolution predicate.[/dim]"
+            )
+            continue
 
-        relevant_news = filter_news_for_market(market, news)
-        console.print(f"   Relevant headlines: {len(relevant_news)}")
+        for market in matched_markets:
+            heading = Text(f"   → {market.question[:80]}")
+            if market.url:
+                heading.append("  ")
+                heading.append("Open market", style=f"link {market.url}")
+            console.print(heading)
 
-        score_result = score_market(market, relevant_news)
-        model_score = score_result["confidence"]
-        reasoning = score_result["reasoning"]
-        console.print(f"   Model score: {model_score:.2f}  (market: {market.yes_price:.2f})")
+            classification = classify_event(event, market)
+            console.print(
+                f"     Relation: {classification.relation_level} | "
+                f"Direction: {classification.direction} | "
+                f"Materiality: {classification.materiality:.2f} | "
+                f"Fair YES: {classification.estimated_yes_probability:.2f}"
+            )
+            signal = detect_edge_v2(market, classification, event)
+            if signal:
+                console.print(
+                    f"     [green bold]SIGNAL: {signal.side} | "
+                    f"Edge: {signal.edge:.1%} | "
+                    f"Confirmations: {signal.confirmation_count}/"
+                    f"{signal.required_confirmations} | "
+                    f"Size: ${signal.bet_amount}[/green bold]"
+                )
+                signals.append(signal)
+            else:
+                console.print(
+                    "     [dim]No actionable resolution-aware edge.[/dim]"
+                )
 
-        headlines_str = "\n".join(n.headline for n in relevant_news[:5])
-        signal = detect_edge(market, model_score, reasoning, headlines_str)
-
-        if signal:
-            edge_pct = signal.edge * 100
-            console.print(f"   [green bold]SIGNAL: {signal.side} | Edge: {edge_pct:.1f}% | Size: ${signal.bet_amount}[/green bold]")
-            signals.append(signal)
-        else:
-            edge = abs(model_score - market.yes_price)
-            console.print(f"   [dim]No edge (diff: {edge:.2f}, threshold: {config.EDGE_THRESHOLD})[/dim]")
-
-        time.sleep(0.5)
+    # A scan may contain several reports about one market. Execute at most the
+    # strongest independently classified signal for that market in this run.
+    strongest_by_market: dict[str, Signal] = {}
+    for signal in signals:
+        current = strongest_by_market.get(signal.market.condition_id)
+        if current is None or signal.edge > current.edge:
+            strongest_by_market[signal.market.condition_id] = signal
+    signals = list(strongest_by_market.values())
 
     # Step 4: Execute Trades
     if signals:

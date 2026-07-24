@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import classifier
 import config
-import scorer
 from markets import Market
-from scraper import NewsItem
 
 
 class FakeResponses:
@@ -36,7 +33,9 @@ def _market() -> Market:
 
 def test_classifier_uses_configured_openai_model(monkeypatch):
     responses = FakeResponses(
-        '{"direction":"bullish","materiality":0.8,"reasoning":"Material news."}'
+        '{"relation_level":"probability_evidence","direction":"bullish",'
+        '"materiality":0.8,"estimated_yes_probability":0.7,'
+        '"reasoning":"Material news."}'
     )
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(config, "OPENAI_MODEL", "test-model")
@@ -55,28 +54,21 @@ def test_classifier_uses_configured_openai_model(monkeypatch):
     assert responses.calls[0]["max_output_tokens"] == 350
 
 
-def test_scorer_uses_configured_openai_model(monkeypatch):
+def test_classifier_cannot_turn_irrelevant_absence_into_no_signal(monkeypatch):
     responses = FakeResponses(
-        '{"confidence":0.7,"reasoning":"Relevant news.","relevant_headlines":[0]}'
+        '{"relation_level":"irrelevant","direction":"bearish",'
+        '"materiality":0.9,"estimated_yes_probability":0.05,'
+        '"reasoning":"The report does not mention the event."}'
     )
     monkeypatch.setattr(config, "OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(config, "OPENAI_MODEL", "test-model")
     monkeypatch.setattr(
-        scorer,
+        classifier,
         "OpenAI",
         lambda api_key: SimpleNamespace(responses=responses),
     )
-    news = [
-        NewsItem(
-            "Breaking news",
-            "wire",
-            "",
-            datetime.now(timezone.utc),
-        )
-    ]
 
-    result = scorer.score_market(_market(), news)
+    result = classifier.classify("Unrelated report", _market(), "wire")
 
-    assert result["confidence"] == 0.7
-    assert responses.calls[0]["model"] == "test-model"
-    assert responses.calls[0]["max_output_tokens"] == 500
+    assert result.direction == "neutral"
+    assert result.materiality == 0.0
+    assert result.estimated_yes_probability == _market().yes_price

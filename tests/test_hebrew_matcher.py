@@ -47,3 +47,52 @@ def test_matches_hebrew_report_to_english_market(monkeypatch):
 
 def test_fingerprint_bridges_hebrew_event_concepts():
     assert "iran" in event_fingerprint("איראן שיגרה טילים לעבר ישראל")
+
+
+def test_airspace_market_rejects_generic_israel_security_news(monkeypatch):
+    monkeypatch.setattr("config.MARKET_MATCH_THRESHOLD", 0.1)
+    market = _market(
+        "Will Israel close its airspace by July 31?",
+        "A broad closure of commercial aviation across Israeli civilian airspace qualifies.",
+    )
+
+    matches = rank_news_to_markets(
+        'צה"ל נערך לפעילות מבצעית בעקבות פיגוע בשומרון',
+        "",
+        [market],
+        source_relevance=1.0,
+        source_topics=("israel", "aviation"),
+    )
+
+    assert matches == []
+
+
+def test_airspace_market_requires_aviation_capable_source(monkeypatch):
+    monkeypatch.setattr("config.MARKET_MATCH_THRESHOLD", 0.1)
+    market = _market(
+        "Will Israel close its airspace by July 31?",
+        "A broad closure of commercial aviation across Israeli civilian airspace qualifies.",
+    )
+    headline = (
+        'רשות שדות התעופה: ישראל סגרה את המרחב האווירי לטיסות מסחריות'
+    )
+
+    rejected = rank_news_to_markets(
+        headline,
+        "",
+        [market],
+        source_relevance=1.0,
+        source_topics=("israel", "security"),
+    )
+    accepted = rank_news_to_markets(
+        headline,
+        "",
+        [market],
+        source_relevance=1.0,
+        source_topics=("israel", "aviation"),
+    )
+
+    assert rejected == []
+    assert accepted
+    assert accepted[0].shared_entities == ("israel",)
+    assert {"aviation", "closure"} <= set(accepted[0].shared_predicates)

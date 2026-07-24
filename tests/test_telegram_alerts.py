@@ -4,6 +4,7 @@ import config
 import telegram_alerts
 from edge import Signal
 from markets import Market
+from telegram_alerts import _alert_payload
 
 
 class FakeResponse:
@@ -83,3 +84,44 @@ def test_does_not_alert_for_rejected_trade(monkeypatch):
         _signal(),
         {"status": "rejected_slippage"},
     )
+
+
+def test_alert_contains_only_selected_evidence_and_policy_metadata():
+    market = Market(
+        "condition",
+        "Will Israel close its airspace by July 31?",
+        "israel",
+        0.4,
+        0.6,
+        10_000,
+        "",
+        True,
+        [],
+    )
+    signal = Signal(
+        market=market,
+        claude_score=0.8,
+        market_price=0.4,
+        edge=0.3,
+        side="YES",
+        bet_amount=5.0,
+        reasoning="Official aviation authority announced a broad closure.",
+        headlines="ישראל סגרה את המרחב האווירי לטיסות מסחריות",
+        news_source="rss",
+        classification="bullish",
+        source_id="official_aviation",
+        confirmation_count=2,
+        required_confirmations=2,
+        relation_level="resolution_evidence",
+    )
+
+    text = _alert_payload(signal, {"status": "dry_run"})["text"]
+
+    assert "Relation: resolution_evidence" in text
+    assert "Confirmations: 2/2" in text
+    assert "Source: official_aviation" in text
+    assert (
+        "Selected headline: ישראל סגרה את המרחב האווירי לטיסות מסחריות"
+        in text
+    )
+    assert "Headline:" not in text.replace("Selected headline:", "")

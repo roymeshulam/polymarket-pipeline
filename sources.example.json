@@ -1,9 +1,9 @@
 {
   "sources": [
     {
-      "id": "my_rss_source",
+      "id": "my_aviation_rss_source",
       "kind": "rss",
-      "name": "Hebrew RSS source",
+      "name": "Hebrew aviation RSS source",
       "independence_group": "publisher_name",
       "enabled": false,
       "language": "he",
@@ -14,7 +14,7 @@
       "trust_tier": 2,
       "min_confirmations": 2,
       "allow_live": false,
-      "topics": ["israel", "politics"]
+      "topics": ["israel", "aviation"]
     },
     {
       "id": "my_x_accounts",

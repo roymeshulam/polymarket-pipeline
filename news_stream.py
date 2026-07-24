@@ -13,7 +13,7 @@ import httpx
 
 import config
 from matcher import event_fingerprint, normalize_text
-from scraper import scrape_rss_profile
+from scraper import NewsItem, scrape_rss_profile
 from source_config import SourceProfile, profile_map, profiles_by_kind
 
 log = logging.getLogger(__name__)
@@ -87,6 +87,62 @@ def _event_from_profile(
         required_confirmations=profile.min_confirmations,
         allow_live=profile.allow_live,
         topics=profile.topics,
+    )
+
+
+def confirmed_events_from_news_items(
+    items: list[NewsItem],
+    profiles: list[SourceProfile] | None = None,
+) -> list[NewsEvent]:
+    """Convert a synchronous RSS batch and retain only policy-approved events."""
+    configured_profiles = profile_map(
+        config.SOURCE_PROFILES if profiles is None else profiles
+    )
+    eligible: list[NewsEvent] = []
+
+    for item in items:
+        profile = configured_profiles.get(item.source_id)
+        if profile is None or not profile.enabled:
+            continue
+        event = _event_from_profile(
+            profile,
+            headline=item.headline,
+            url=item.url,
+            published_at=item.published_at,
+            summary=item.summary,
+        )
+        if event.is_fresh() and event.relevance >= config.MIN_SOURCE_RELEVANCE:
+            eligible.append(event)
+
+    groups_by_fingerprint: dict[str, set[str]] = defaultdict(set)
+    for event in eligible:
+        fingerprint = event_fingerprint(event.headline, event.summary)
+        if fingerprint:
+            groups_by_fingerprint[fingerprint].add(
+                event.independence_group or event.source_id
+            )
+
+    confirmed_by_fingerprint: dict[str, NewsEvent] = {}
+    for event in eligible:
+        fingerprint = event_fingerprint(event.headline, event.summary)
+        event.confirmation_count = len(groups_by_fingerprint.get(fingerprint, set()))
+        if not event.is_confirmed():
+            continue
+        current = confirmed_by_fingerprint.get(fingerprint)
+        if current is None or (
+            event.trust_tier,
+            -event.relevance,
+            -event.published_at.timestamp(),
+        ) < (
+            current.trust_tier,
+            -current.relevance,
+            -current.published_at.timestamp(),
+        ):
+            confirmed_by_fingerprint[fingerprint] = event
+    return sorted(
+        confirmed_by_fingerprint.values(),
+        key=lambda event: event.published_at,
+        reverse=True,
     )
 
 
@@ -419,14 +475,13 @@ class NewsAggregator:
     async def _policy_router(self) -> None:
         while True:
             event: NewsEvent = await self._internal_queue.get()
-            event.confirmation_count = self._confirmation_count(event)
-
             if not event.is_fresh():
                 self.stats["stale"] += 1
                 continue
             if event.relevance < config.MIN_SOURCE_RELEVANCE:
                 self.stats["low_relevance"] += 1
                 continue
+            event.confirmation_count = self._confirmation_count(event)
 
             dedup_key = (
                 event.source_id,
@@ -439,6 +494,7 @@ class NewsAggregator:
 
             if not event.is_confirmed():
                 self.stats["unconfirmed"] += 1
+                continue
             self.stats[event.source] = self.stats.get(event.source, 0) + 1
             self.stats["total"] += 1
             await self.output_queue.put(event)

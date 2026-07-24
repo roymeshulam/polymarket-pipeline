@@ -20,10 +20,12 @@ from rich import box
 import config
 import logger
 from scraper import scrape_all
-from markets import fetch_active_markets, filter_by_categories, Market
-from scorer import score_market, filter_news_for_market
-from edge import detect_edge
+from markets import fetch_target_markets, filter_by_categories, Market
+from classifier import classify_event
+from edge import detect_edge_v2
 from executor import execute_trade
+from matcher import match_news_to_markets
+from news_stream import confirmed_events_from_news_items
 
 console = Console()
 
@@ -69,33 +71,57 @@ def run_scan_cycle():
         {"headline": n.headline, "source": n.source, "age": f"{n.age_hours():.1f}h"}
         for n in news[:8]
     ]
+    events = confirmed_events_from_news_items(news)
 
     # Step 2: Fetch markets
     state.scan_status = "Fetching markets..."
-    all_markets = fetch_active_markets(limit=100)
+    all_markets = fetch_target_markets()
     markets = filter_by_categories(all_markets)[:12]
     state.markets_scanned = len(markets)
     state.latest_markets = markets
 
-    # Step 3: Score and detect edge
-    signals = []
+    # Step 3: Match and classify confirmed events independently.
+    signals_by_market = {}
     scores = {}
-    for i, market in enumerate(markets):
-        state.scan_status = f"Scoring [{i + 1}/{len(markets)}] {market.question[:40]}..."
-        relevant = filter_news_for_market(market, news)
-        result = score_market(market, relevant)
-        scores[market.condition_id] = result
+    for index, event in enumerate(events, start=1):
+        state.scan_status = (
+            f"Classifying event [{index}/{len(events)}] "
+            f"{event.headline[:40]}..."
+        )
+        matched_markets = match_news_to_markets(
+            event.headline,
+            markets,
+            summary=event.summary,
+            source_relevance=event.relevance,
+            source_topics=event.topics,
+        )
+        for market in matched_markets:
+            classification = classify_event(event, market)
+            signal = detect_edge_v2(market, classification, event)
+            score = {
+                "confidence": classification.estimated_yes_probability,
+                "reasoning": classification.reasoning,
+                "relation_level": classification.relation_level,
+                "edge": signal.edge if signal else 0.0,
+            }
+            scores[market.condition_id] = score
+            if signal:
+                current = signals_by_market.get(market.condition_id)
+                if current is None or signal.edge > current["signal"].edge:
+                    signals_by_market[market.condition_id] = {
+                        "market": market,
+                        "score": score,
+                        "signal": signal,
+                    }
 
-        headlines_str = "\n".join(n.headline for n in relevant[:5])
-        signal = detect_edge(market, result["confidence"], result["reasoning"], headlines_str)
-        if signal:
-            trade_result = execute_trade(signal)
-            signals.append({
-                "market": market,
-                "score": result,
-                "trade": trade_result,
-            })
-        time.sleep(0.3)
+    signals = []
+    for candidate in signals_by_market.values():
+        trade_result = execute_trade(candidate["signal"])
+        signals.append({
+            "market": candidate["market"],
+            "score": candidate["score"],
+            "trade": trade_result,
+        })
 
     state.latest_signals = signals
     state.latest_scores = scores
@@ -135,7 +161,7 @@ def render_header() -> Panel:
     grid.add_column(justify="right", ratio=1)
     grid.add_row(
         Text(" POLYMARKET PIPELINE", style="bold bright_green"),
-        Text("NEWS SCRAPER + AI CONFIDENCE SCORER + AUTO TRADER", style=DIM),
+        Text("EVENT MATCHER + RESOLUTION CLASSIFIER + GUARDED TRADER", style=DIM),
         Text(f"{now} ", style=MUTED),
     )
     return Panel(grid, style="bright_green", box=box.HEAVY)
