@@ -11,15 +11,13 @@ from markets import get_token_id
 
 ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 PRIVATE_KEY_RE = re.compile(r"^(0x)?[a-fA-F0-9]{64}$")
+_CLOB_CLIENT = None
 
 
 def validate_live_configuration() -> list[str]:
     """Return configuration errors that must block all live orders."""
     errors = []
     required = {
-        "POLYMARKET_API_KEY": config.POLYMARKET_API_KEY,
-        "POLYMARKET_API_SECRET": config.POLYMARKET_API_SECRET,
-        "POLYMARKET_API_PASSPHRASE": config.POLYMARKET_API_PASSPHRASE,
         "POLYMARKET_PRIVATE_KEY": config.POLYMARKET_PRIVATE_KEY,
         "POLYMARKET_FUNDER_ADDRESS": config.POLYMARKET_FUNDER_ADDRESS,
     }
@@ -28,12 +26,23 @@ def validate_live_configuration() -> list[str]:
         errors.append("POLYMARKET_PRIVATE_KEY is not a 32-byte hex key")
     if config.POLYMARKET_FUNDER_ADDRESS and not ADDRESS_RE.fullmatch(config.POLYMARKET_FUNDER_ADDRESS):
         errors.append("POLYMARKET_FUNDER_ADDRESS is not a valid address")
-    if config.POLYMARKET_SIGNATURE_TYPE not in {0, 1, 2}:
-        errors.append("POLYMARKET_SIGNATURE_TYPE must be 0, 1, or 2")
+    if config.POLYMARKET_SIGNATURE_TYPE not in {0, 1, 2, 3}:
+        errors.append("POLYMARKET_SIGNATURE_TYPE must be 0, 1, 2, or 3")
     if config.LIVE_TRADING_ACK.lower() != config.POLYMARKET_FUNDER_ADDRESS.lower():
         errors.append("LIVE_TRADING_ACK must exactly match POLYMARKET_FUNDER_ADDRESS")
-    if not config.LIVE_ALLOWED_NEWS_SOURCES:
-        errors.append("LIVE_ALLOWED_NEWS_SOURCES must explicitly list reviewed sources")
+    if not config.LIVE_SOURCE_ALLOWLIST:
+        errors.append("LIVE_SOURCE_ALLOWLIST must explicitly list reviewed source IDs")
+    configured_sources = {
+        profile.source_id.lower(): profile for profile in config.SOURCE_PROFILES
+    }
+    for source_id in config.LIVE_SOURCE_ALLOWLIST:
+        profile = configured_sources.get(source_id)
+        if profile is None:
+            errors.append(f"LIVE_SOURCE_ALLOWLIST contains unknown source: {source_id}")
+        elif not profile.enabled or not profile.allow_live:
+            errors.append(
+                f"{source_id} must be enabled and allow_live in the source configuration"
+            )
     if not 0 < config.MAX_BET_USD <= config.MAX_OPEN_EXPOSURE_USD <= config.DAILY_LOSS_LIMIT_USD:
         errors.append("limits must satisfy MAX_BET <= MAX_OPEN_EXPOSURE <= DAILY_LOSS_LIMIT")
     if not 0 <= config.MAX_SLIPPAGE_BPS <= 500:
@@ -49,10 +58,34 @@ def execute_trade(signal: Signal) -> dict:
     errors = validate_live_configuration()
     if errors:
         return _log_and_return(signal, "rejected_live_config", None)
-    if signal.news_source.lower() not in config.LIVE_ALLOWED_NEWS_SOURCES:
+    source_id = (signal.source_id or signal.news_source).lower()
+    profiles = {
+        profile.source_id.lower(): profile for profile in config.SOURCE_PROFILES
+    }
+    profile = profiles.get(source_id)
+    if (
+        source_id not in config.LIVE_SOURCE_ALLOWLIST
+        or profile is None
+        or not profile.enabled
+        or not profile.allow_live
+        or profile.trust_tier > 2
+        or profile.relevance < config.MIN_SOURCE_RELEVANCE
+    ):
         return _log_and_return(signal, "rejected_news_source", None)
-    if signal.news_latency_ms < 0 or signal.news_latency_ms > config.MAX_NEWS_AGE_SECONDS * 1000:
+    if (
+        profile.max_age_seconds <= 0
+        or signal.news_age_seconds < 0
+        or signal.news_age_seconds > profile.max_age_seconds
+    ):
         return _log_and_return(signal, "rejected_stale_news", None)
+    required_confirmations = max(
+        profile.min_confirmations,
+        signal.required_confirmations,
+    )
+    if signal.confirmation_count < required_confirmations:
+        return _log_and_return(signal, "rejected_unconfirmed", None)
+    if signal.relation_level != "resolution_evidence":
+        return _log_and_return(signal, "rejected_non_resolution_evidence", None)
     if not 0 < signal.bet_amount <= config.MAX_BET_USD:
         return _log_and_return(signal, "rejected_bet_size", None)
 
@@ -71,36 +104,48 @@ async def execute_trade_async(signal: Signal) -> dict:
 
 
 def _build_client():
-    from py_clob_client.client import ClobClient
-    from py_clob_client.clob_types import ApiCreds
+    """Build and cache an authenticated CLOB V2 client."""
+    global _CLOB_CLIENT
+    if _CLOB_CLIENT is not None:
+        return _CLOB_CLIENT
 
-    creds = ApiCreds(
-        api_key=config.POLYMARKET_API_KEY,
-        api_secret=config.POLYMARKET_API_SECRET,
-        api_passphrase=config.POLYMARKET_API_PASSPHRASE,
-    )
-    return ClobClient(
+    from py_clob_client_v2 import ClobClient
+
+    bootstrap = ClobClient(
         host=config.POLYMARKET_HOST,
         key=config.POLYMARKET_PRIVATE_KEY,
-        chain_id=137,
+        chain_id=config.POLYMARKET_CHAIN_ID,
+        signature_type=config.POLYMARKET_SIGNATURE_TYPE,
+        funder=config.POLYMARKET_FUNDER_ADDRESS,
+    )
+    creds = bootstrap.create_or_derive_api_key()
+    _CLOB_CLIENT = ClobClient(
+        host=config.POLYMARKET_HOST,
+        key=config.POLYMARKET_PRIVATE_KEY,
+        chain_id=config.POLYMARKET_CHAIN_ID,
         creds=creds,
         signature_type=config.POLYMARKET_SIGNATURE_TYPE,
         funder=config.POLYMARKET_FUNDER_ADDRESS,
     )
+    return _CLOB_CLIENT
 
 
 def _execute_live(signal: Signal, reservation_id: int) -> dict:
     """Place a bounded GTC order using a fresh executable price."""
     try:
-        from py_clob_client.clob_types import OrderArgs, OrderType
-        BUY = "BUY"
+        from py_clob_client_v2 import (
+            OrderArgs,
+            OrderType,
+            PartialCreateOrderOptions,
+            Side,
+        )
 
         client = _build_client()
         token_id = get_token_id(signal.market, signal.side)
         if not token_id:
             raise ValueError("market has no verified outcome token")
 
-        price_response = client.get_price(token_id, BUY)
+        price_response = client.get_price(token_id, Side.BUY)
         live_price = float(
             price_response.get("price") if isinstance(price_response, dict) else price_response
         )
@@ -113,15 +158,28 @@ def _execute_live(signal: Signal, reservation_id: int) -> dict:
             logger.update_reservation(reservation_id, "released")
             return _log_and_return(signal, "rejected_slippage", None)
 
-        limit_price = round(live_price, 4)
+        tick_size = float(signal.market.tick_size or "0.01")
+        if tick_size not in {0.1, 0.01, 0.005, 0.0025, 0.001, 0.0001}:
+            raise ValueError("unsupported market tick size")
+        tick_decimals = max(0, len(str(tick_size).split(".")[-1]))
+        limit_price = round(round(live_price / tick_size) * tick_size, tick_decimals)
         shares = round(signal.bet_amount / limit_price, 2)
         if shares <= 0 or shares * limit_price > signal.bet_amount + 0.01:
             raise ValueError("invalid order notional")
 
-        signed_order = client.create_order(
-            OrderArgs(price=limit_price, size=shares, side=BUY, token_id=token_id)
+        response = client.create_and_post_order(
+            order_args=OrderArgs(
+                price=limit_price,
+                size=shares,
+                side=Side.BUY,
+                token_id=token_id,
+            ),
+            options=PartialCreateOrderOptions(
+                tick_size=signal.market.tick_size or "0.01",
+                neg_risk=signal.market.neg_risk,
+            ),
+            order_type=OrderType.GTC,
         )
-        response = client.post_order(signed_order, OrderType.GTC)
         order_id = response.get("orderID") or response.get("id")
         if not order_id:
             raise RuntimeError("CLOB did not return an order id")

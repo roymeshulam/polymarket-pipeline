@@ -18,14 +18,14 @@ from rich.text import Text
 import config
 import logger
 from scraper import scrape_all
-from markets import fetch_active_markets, filter_by_categories
+from markets import fetch_target_markets, filter_by_categories
 from scorer import score_market, filter_news_for_market
 from edge import detect_edge, detect_edge_v2, Signal
 from executor import execute_trade, execute_trade_async
 from news_stream import NewsAggregator, NewsEvent
 from market_watcher import MarketWatcher
 from matcher import match_news_to_markets
-from classifier import classify_async
+from classifier import classify_event_async
 from telegram_alerts import send_trade_alert, send_trade_alert_async
 
 console = Console()
@@ -83,7 +83,7 @@ class PipelineV2:
             # Log the news event
             logger.log_news_event(
                 headline=event.headline,
-                source=event.source,
+                source=event.source_id or event.source,
                 received_at=event.received_at.isoformat(),
                 latency_ms=event.latency_ms,
             )
@@ -92,6 +92,8 @@ class PipelineV2:
             matched = match_news_to_markets(
                 event.headline,
                 self.market_watcher.tracked_markets,
+                summary=event.summary,
+                source_relevance=event.relevance,
             )
 
             if not matched:
@@ -102,9 +104,7 @@ class PipelineV2:
             # Classify against each matched market
             for market in matched:
                 try:
-                    classification = await classify_async(
-                        event.headline, market, event.source
-                    )
+                    classification = await classify_event_async(event, market)
 
                     signal = detect_edge_v2(market, classification, event)
                     if signal:
@@ -112,8 +112,11 @@ class PipelineV2:
                         await self.signal_queue.put(signal)
                         console.print(
                             f"  [bright_green]SIGNAL[/bright_green] "
-                            f"[{event.source}] {classification.direction.upper()} "
+                            f"[{event.source_id}] {classification.direction.upper()} "
+                            f"{classification.relation_level} "
                             f"mat:{classification.materiality:.2f} "
+                            f"confirm:{event.confirmation_count}/"
+                            f"{event.required_confirmations} "
                             f"→ {signal.side} ${signal.bet_amount} "
                             f"on \"{market.question[:40]}...\" "
                             f"({signal.total_latency_ms}ms)"
@@ -143,13 +146,14 @@ class PipelineV2:
             await asyncio.sleep(30)
             ns = self.news_aggregator.stats
             log.info(
-                "Status: news=%s (tw:%s tg:%s rss:%s) stale=%s "
+                "Status: news=%s (x:%s tg:%s rss:%s) stale=%s unconfirmed=%s "
                 "matched=%s signals=%s trades=%s markets=%s",
                 self.stats["news_processed"],
                 ns.get("twitter", 0),
                 ns.get("telegram", 0),
                 ns.get("rss", 0),
                 ns.get("stale", 0),
+                ns.get("unconfirmed", 0),
                 self.stats["markets_matched"],
                 self.stats["signals_found"],
                 self.stats["trades_executed"],
@@ -196,7 +200,7 @@ def run_pipeline(
 
     # Step 2: Fetch Markets
     console.print("\n[bold]2. Fetching Polymarket markets...[/bold]")
-    all_markets = fetch_active_markets(limit=100)
+    all_markets = fetch_target_markets()
     markets = filter_by_categories(all_markets, categories)[:max_markets]
     console.print(f"   {len(markets)} markets in target categories (of {len(all_markets)} total)")
 

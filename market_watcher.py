@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
 import config
-from markets import Market, fetch_active_markets, filter_by_categories
+from markets import Market, fetch_target_markets
 
 log = logging.getLogger(__name__)
 
@@ -56,10 +56,9 @@ class MarketWatcher:
         """Fetch and filter markets from Gamma API."""
         try:
             all_markets = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: fetch_active_markets(limit=200)
+                None, fetch_target_markets
             )
-            categorized = filter_by_categories(all_markets)
-            self.tracked_markets = self.get_niche_markets(categorized)
+            self.tracked_markets = self.get_niche_markets(all_markets)
 
             # Update snapshots
             now = datetime.now(timezone.utc)

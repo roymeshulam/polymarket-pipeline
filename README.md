@@ -1,67 +1,64 @@
-# Polymarket Pipeline V2
+# Israel Event Intelligence for Polymarket
 
-An AI-powered breaking news detector that classifies events against prediction markets and trades automatically when it finds edge.
+A Hebrew-oriented event pipeline that monitors reviewed Israeli sources, maps
+reports to the exact rules of active Polymarket markets, and remains in dry-run
+mode unless strict source and wallet safeguards are explicitly enabled.
 
+```text
+Hebrew RSS / reviewed X accounts / reviewed Telegram channels
+        ↓
+Per-source freshness, trust, relevance, and confirmation policy
+        ↓
+Hebrew normalization + canonical event/entity extraction
+        ↓
+Match against market question + full resolution rules
+        ↓
+Resolution evidence / probability evidence / topical / irrelevant
+        ↓
+Fair-probability comparison → dry-run signal or guarded CLOB V2 order
 ```
-Breaking News (Twitter / Telegram / RSS)
-        ↓ (< 5 seconds)
-Match to niche markets (< $500K volume)
-        ↓
-OpenAI Classification: bullish / bearish / neutral + materiality
-        ↓
-Edge detection + quarter-Kelly sizing
-        ↓
-Instant execution → SQLite log → calibration tracking
-```
 
-## What Changed From V1
+## Important behavior
 
-V1 scraped RSS feeds (5-60 min delay), asked an OpenAI model "what's the probability?" (wrong question for LLMs), and competed on high-volume markets (where every bot already operates).
+- Ynet breaking-news RSS is enabled as a discovery source.
+- Ynet requires an independent confirmation and is not authorized for live
+  trading by default.
+- X and Telegram entries are disabled placeholders until you add reviewed
+  accounts or channels.
+- Every source has its own maximum actionable age and relevance score.
+- Topical overlap never becomes a signal.
+- Probability evidence can be studied in dry-run mode but cannot trigger a live
+  order.
+- Live orders require direct resolution evidence, source-level live permission,
+  enough independent confirmations, and an environment allowlist.
+- The legacy `py-clob-client` has been replaced by
+  `py-clob-client-v2==1.1.0`.
 
-V2 inverts all three:
-- **Speed**: Real-time Twitter/Telegram streams instead of stale RSS
-- **Classification**: OpenAI classifies "bullish or bearish?" instead of estimating probability — a task LLMs are actually good at
-- **Niche markets**: Only trades markets under $500K volume where the crowd is small and slow
+## Setup
 
----
-
-## Setup (2 minutes)
-
-### One-Command Setup
+Python 3.10 or newer is recommended.
 
 ```bash
-git clone https://github.com/brodyautomates/polymarket-pipeline.git
-cd polymarket-pipeline
-bash setup.sh
-```
-
-### Manual Setup
-
-```bash
-git clone https://github.com/brodyautomates/polymarket-pipeline.git
-cd polymarket-pipeline
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-```
-
-Add your keys to `.env`:
-
-```
-OPENAI_API_KEY=sk-...                # Required
-OPENAI_MODEL=gpt-5.4-mini            # Optional — this is the default
-TWITTER_BEARER_TOKEN=...             # Optional — real-time news stream
-TELEGRAM_BOT_TOKEN=...               # Optional — channel monitoring
-TELEGRAM_ALERT_CHAT_ID=...           # Optional — edge-trade notifications
-POLYMARKET_API_KEY=...               # Optional — live trading only
-```
-
-### Verify
-
-```bash
 python cli.py verify
 ```
+
+On Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+python cli.py verify
+```
+
+Set `OPENAI_API_KEY` in `.env`. RSS works without an additional API key. Set
+`TWITTER_BEARER_TOKEN` or `TELEGRAM_BOT_TOKEN` only when the corresponding
+profiles are enabled.
 
 ### Automated deployment
 
@@ -79,153 +76,144 @@ Configure these secrets in the GitHub `production` environment:
 
 The workflow can also be started manually with **Run workflow**.
 
----
+## Configure news sources
 
-## How to Use
+Edit `sources.json`, or copy `sources.example.json` to a private file and set:
 
-### V2: Event-Driven Pipeline (Recommended)
+```text
+SOURCE_CONFIG_PATH=C:\path\to\my-sources.json
+```
+
+Each source has an independent policy:
+
+```json
+{
+  "id": "reviewed_reporter",
+  "kind": "twitter",
+  "name": "Reviewed reporter",
+  "independence_group": "reporter_name",
+  "enabled": true,
+  "language": "he",
+  "query": "from:ACCOUNT_NAME -is:retweet",
+  "max_age_seconds": 120,
+  "poll_interval_seconds": 60,
+  "relevance": 0.9,
+  "trust_tier": 2,
+  "min_confirmations": 2,
+  "allow_live": false,
+  "topics": ["israel", "security"]
+}
+```
+
+Policy fields:
+
+| Field | Meaning |
+|---|---|
+| `id` | Stable ID used in logs and the live allowlist |
+| `kind` | `rss`, `twitter`, or `telegram` |
+| `independence_group` | Shared origin used for corroboration counting |
+| `max_age_seconds` | Source-specific validity window |
+| `poll_interval_seconds` | RSS polling cadence; retained as source metadata elsewhere |
+| `relevance` | Editorial relevance from `0.0` to `1.0` |
+| `trust_tier` | `1` official through `5` unverified |
+| `min_confirmations` | Independent source IDs required |
+| `allow_live` | Source-level live permission; keep false while evaluating |
+| `topics` | Editorial scope for review and future routing |
+
+An enabled Telegram source needs its numeric `channel_id`. A Telegram bot only
+receives channel posts when it has been added to that channel with suitable
+permissions.
+
+The X adapter creates one tagged Filtered Stream rule per enabled X profile.
+Review query volume carefully because X charges for posts delivered.
+
+Active market discovery uses Gamma search instead of scanning unrelated
+top-volume markets. Customize the comma-separated search set when needed:
+
+```text
+MARKET_SEARCH_QUERIES=Israel,Netanyahu,Gaza,Hamas,Hezbollah,Iran
+```
+
+## Run
 
 ```bash
-# Start the real-time pipeline — monitors news streams, classifies, trades
 python cli.py watch
+python cli.py scrape --hours 1
+python cli.py markets --max 100
+python cli.py dashboard
+python cli.py backtest --limit 50
+```
 
-# Enable live trading
+`watch` is the recommended path. `run` remains available for synchronous
+experiments, but the event-driven path contains the source-policy and
+corroboration controls.
+
+## Live trading
+
+Dry-run is the default. Do not enable live mode until shadow testing demonstrates
+an edge after spread, fees, slippage, false reports, and corrections.
+
+The CLOB V2 SDK derives API credentials from:
+
+```text
+POLYMARKET_PRIVATE_KEY=
+POLYMARKET_FUNDER_ADDRESS=
+POLYMARKET_SIGNATURE_TYPE=
+LIVE_TRADING_ACK=
+```
+
+To authorize a reviewed source for live evaluation, both controls must agree:
+
+1. Set `"allow_live": true` on a trust-tier 1 or 2 source profile.
+2. Add the exact source ID to `LIVE_SOURCE_ALLOWLIST`.
+
+The executor additionally requires:
+
+- direct `resolution_evidence`;
+- the source's independent-confirmation threshold;
+- the source's own freshness window;
+- a fresh executable price within the slippage ceiling;
+- bet and exposure limits;
+- an interactive funder-address confirmation.
+
+Then, and only then:
+
+```bash
 python cli.py watch --live
 ```
 
-The `watch` command runs indefinitely. It connects to your configured news sources (Twitter, Telegram, RSS fallback), matches breaking headlines to niche Polymarket markets, classifies each with OpenAI, and executes trades when it finds edge.
-
-### V1: Synchronous Pipeline
-
-```bash
-# Single scan — scrape RSS, score markets, log signals
-python cli.py run
-
-python cli.py run --max 15 --hours 12
-```
-
-### Live Dashboard
-
-```bash
-python cli.py dashboard
-```
-
-### Backtest
-
-```bash
-# Validate the V2 strategy against resolved markets
-python cli.py backtest
-
-python cli.py backtest --limit 50 --category ai
-```
-
-### All Commands
-
-| Command | What it does |
-|---|---|
-| `python cli.py watch` | V2: Real-time event-driven pipeline |
-| `python cli.py run` | V1: Synchronous RSS-based pipeline |
-| `python cli.py dashboard` | Live terminal dashboard |
-| `python cli.py backtest` | Backtest against resolved markets |
-| `python cli.py calibrate` | Classification accuracy report |
-| `python cli.py niche` | Browse niche markets (volume-filtered) |
-| `python cli.py verify` | Check all API keys and connections |
-| `python cli.py scrape` | Test news scraper |
-| `python cli.py markets` | Browse all active markets |
-| `python cli.py trades` | View trade log |
-| `python cli.py stats` | Performance + latency + calibration stats |
-
----
+Some newer deposit-wallet/signature flows have had SDK or server-side
+compatibility limitations. Verify your exact wallet flow with a minimal-size
+order and current Polymarket documentation before relying on unattended
+execution.
 
 ## Architecture
 
-### V2 Pipeline (Event-Driven)
-
-```
-news_stream.py      Real-time news — Twitter API v2, Telegram, RSS fallback
-market_watcher.py   Polymarket WebSocket — live prices, niche filter, momentum
-classifier.py       OpenAI classification — bullish/bearish/neutral + materiality
-matcher.py          Routes breaking news to relevant markets
-edge.py             Edge detection + Kelly sizing (V2: classification-based)
-executor.py         Trade execution — dry-run + live CLOB orders (async)
-pipeline.py         Event-driven orchestrator (asyncio)
-calibrator.py       Tracks classification accuracy over time
-backtest.py         Historical replay for strategy validation
-```
-
-### Shared Infrastructure
-
-```
-logger.py           SQLite — trades, news events, calibration, latency tracking
-config.py           All settings, API keys, thresholds
-dashboard.py        Bloomberg Terminal-style live dashboard
-cli.py              CLI — watch, run, backtest, calibrate, niche, verify, etc.
+```text
+source_config.py    Typed per-source policy loading and validation
+sources.json        Reviewed source registry (no secrets)
+news_stream.py      RSS, X and Telegram adapters; freshness and corroboration
+matcher.py          Hebrew normalization and canonical concept matching
+classifier.py       Resolution-aware Hebrew/English classification
+markets.py          Gamma discovery plus resolution metadata and token IDs
+market_watcher.py   Live order-book price updates
+edge.py             Fair-probability edge calculation
+executor.py         Fail-closed CLOB V2 execution
+pipeline.py         Async orchestration
+logger.py           SQLite audit and calibration data
 ```
 
----
+## Evaluation
 
-## How It Actually Works
+Measure the system in shadow mode by source and event type:
 
-### 1. News Detection
-Real-time streams from Twitter (filtered by keywords: OpenAI, Bitcoin, Fed rate, etc.), Telegram channels, and RSS fallback. Events are deduplicated and timestamped with receive latency.
+- time from original publication to receipt;
+- time to first market-price movement;
+- event-to-market precision;
+- direct-resolution-evidence precision;
+- correction and retraction losses;
+- P&L after spread, fees, and slippage;
+- performance at 30 seconds, 2 minutes, 10 minutes, and 1 hour.
 
-### 2. Market Matching
-Each headline is matched to active niche markets (<$500K volume) by keyword overlap. Only relevant markets proceed to classification.
-
-### 3. Classification (The Key Shift)
-Instead of "what's the probability?", the configured OpenAI model is asked: *"Does this news make the market MORE likely to resolve YES, MORE likely to resolve NO, or is it NOT RELEVANT?"*
-
-This is a classification task — something LLMs are genuinely good at. The model also rates materiality (0-1): how much should this move the price?
-
-### 4. Edge Detection
-If direction is bullish/bearish AND materiality exceeds threshold (default 0.6) AND the market price has room to move — that's a signal. Position sizing uses quarter-Kelly.
-
-### 5. Execution
-Dry-run by default. Live mode places orders via Polymarket CLOB API. Safety: $25 max bet, $100 daily limit.
-
-### 6. Calibration
-Every trade is tracked. As markets resolve, the system measures whether its classifications were correct. Accuracy by source and category informs future confidence.
-
----
-
-## Configuration
-
-| Setting | Default | What it does |
-|---|---|---|
-| `DRY_RUN` | `true` | Set to `false` for live trading |
-| `MAX_BET_USD` | `25` | Maximum single bet |
-| `DAILY_LOSS_LIMIT_USD` | `100` | Pipeline halts if breached |
-| `EDGE_THRESHOLD` | `0.10` | Minimum edge to trigger trade |
-| `MAX_VOLUME_USD` | `500000` | Only trade markets below this volume |
-| `MIN_VOLUME_USD` | `1000` | Skip dead markets |
-| `MATERIALITY_THRESHOLD` | `0.6` | Minimum materiality to act on |
-| `SPEED_TARGET_SECONDS` | `5` | Target news-to-trade latency |
-
----
-
-## Safety
-
-- Dry-run mode ON by default
-- $25 max single bet, $100 daily limit
-- Live mode requires complete wallet credentials and a typed funder-address confirmation
-- Atomic USD exposure reservations prevent concurrent processes from exceeding configured caps
-- Live orders use fresh executable prices with a configurable slippage ceiling
-- Stale news and news sources not listed in `LIVE_ALLOWED_NEWS_SOURCES` are rejected
-- Quarter-Kelly position sizing
-- Niche market filter prevents competing against sophisticated bots
-- Calibration tracking — auto-detects if strategy accuracy drops
-- All API keys in `.env`, never committed
-
-Live orders are logged as `posted`, not filled. Exposure reservations deliberately
-remain active until order reconciliation is implemented; cancel or reconcile open
-orders before clearing reservations. Never delete `trades.db` while live orders exist.
-
----
-
-Built by [@brodyautomates](https://github.com/brodyautomates)
-
----
-
-## Disclaimer
-
-This project is for **entertainment and educational purposes only**. It is not financial advice. The authors are not responsible for any financial losses incurred through the use of this software. Prediction market trading carries significant risk — you can lose money. Never trade with funds you cannot afford to lose. Past performance of any strategy does not guarantee future results. Use at your own risk.
+Language familiarity is a hypothesis for an information advantage, not proof of
+one. Never trade money you cannot afford to lose.

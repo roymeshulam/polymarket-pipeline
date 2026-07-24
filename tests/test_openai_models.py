@@ -52,7 +52,7 @@ def test_classifier_uses_configured_openai_model(monkeypatch):
     assert result.materiality == 0.8
     assert result.model == "test-model"
     assert responses.calls[0]["model"] == "test-model"
-    assert responses.calls[0]["max_output_tokens"] == 200
+    assert responses.calls[0]["max_output_tokens"] == 350
 
 
 def test_scorer_uses_configured_openai_model(monkeypatch):

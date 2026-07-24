@@ -1,0 +1,52 @@
+{
+  "sources": [
+    {
+      "id": "my_rss_source",
+      "kind": "rss",
+      "name": "Hebrew RSS source",
+      "independence_group": "publisher_name",
+      "enabled": false,
+      "language": "he",
+      "url": "https://example.co.il/news.xml",
+      "max_age_seconds": 300,
+      "poll_interval_seconds": 45,
+      "relevance": 0.8,
+      "trust_tier": 2,
+      "min_confirmations": 2,
+      "allow_live": false,
+      "topics": ["israel", "politics"]
+    },
+    {
+      "id": "my_x_accounts",
+      "kind": "twitter",
+      "name": "Reviewed X accounts",
+      "independence_group": "reviewed_x_accounts",
+      "enabled": false,
+      "language": "he",
+      "query": "(from:ACCOUNT_ONE OR from:ACCOUNT_TWO) -is:retweet",
+      "max_age_seconds": 120,
+      "poll_interval_seconds": 60,
+      "relevance": 0.9,
+      "trust_tier": 2,
+      "min_confirmations": 2,
+      "allow_live": false,
+      "topics": ["israel", "security"]
+    },
+    {
+      "id": "my_telegram_channel",
+      "kind": "telegram",
+      "name": "Reviewed Telegram channel",
+      "independence_group": "reviewed_telegram_channel",
+      "enabled": false,
+      "language": "he",
+      "channel_id": "-1000000000000",
+      "max_age_seconds": 180,
+      "poll_interval_seconds": 30,
+      "relevance": 0.8,
+      "trust_tier": 2,
+      "min_confirmations": 2,
+      "allow_live": false,
+      "topics": ["israel", "security"]
+    }
+  ]
+}

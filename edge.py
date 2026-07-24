@@ -25,6 +25,13 @@ class Signal:
     news_latency_ms: int = 0
     classification_latency_ms: int = 0
     total_latency_ms: int = 0
+    source_id: str = ""
+    source_max_age_seconds: int = 0
+    source_allow_live: bool = False
+    confirmation_count: int = 1
+    required_confirmations: int = 1
+    relation_level: str = ""
+    news_age_seconds: float = 0.0
 
 
 def detect_edge(
@@ -67,13 +74,18 @@ def detect_edge_v2(
     news_event: NewsEvent,
 ) -> Signal | None:
     """
-    V2: Use classification direction + materiality instead of probability estimation.
-    Only generates a signal when:
-    - Direction is bullish or bearish (not neutral)
-    - Materiality exceeds threshold
-    - Market price has room to move in the predicted direction
+    Compare the conservative model estimate with the executable market side.
+
+    Topical overlap never becomes a signal. Unconfirmed probability evidence may
+    appear in dry-run analytics, while the executor applies stricter live rules.
     """
     if not news_event.is_fresh():
+        return None
+
+    if classification.relation_level not in {
+        "resolution_evidence",
+        "probability_evidence",
+    }:
         return None
 
     if classification.direction == "neutral":
@@ -83,19 +95,14 @@ def detect_edge_v2(
         return None
 
     market_price = market.yes_price
+    probability_delta = classification.estimated_yes_probability - market_price
+    if classification.direction == "bullish" and probability_delta <= 0:
+        return None
+    if classification.direction == "bearish" and probability_delta >= 0:
+        return None
 
-    if classification.direction == "bullish":
-        side = "YES"
-        # Don't buy YES on markets already priced high
-        if market_price > 0.85:
-            return None
-        edge = classification.materiality * (1.0 - market_price)
-    else:  # bearish
-        side = "NO"
-        # Don't buy NO on markets already priced low
-        if market_price < 0.15:
-            return None
-        edge = classification.materiality * market_price
+    side = "YES" if probability_delta > 0 else "NO"
+    edge = abs(probability_delta) * classification.materiality
 
     if edge < config.EDGE_THRESHOLD:
         return None
@@ -105,19 +112,26 @@ def detect_edge_v2(
 
     return Signal(
         market=market,
-        claude_score=classification.materiality,
+        claude_score=classification.estimated_yes_probability,
         market_price=market_price,
         edge=edge,
         side=side,
         bet_amount=bet_amount,
         reasoning=classification.reasoning,
         headlines=news_event.headline,
-        news_source=news_event.source,
+        news_source=news_event.source_id or news_event.source,
         classification=classification.direction,
         materiality=classification.materiality,
         news_latency_ms=news_event.latency_ms,
         classification_latency_ms=classification.latency_ms,
         total_latency_ms=total_latency,
+        source_id=news_event.source_id,
+        source_max_age_seconds=news_event.max_age_seconds,
+        source_allow_live=news_event.allow_live,
+        confirmation_count=news_event.confirmation_count,
+        required_confirmations=news_event.required_confirmations,
+        relation_level=classification.relation_level,
+        news_age_seconds=news_event.age_seconds(),
     )
 
 

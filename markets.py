@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 import httpx
 
@@ -21,6 +22,10 @@ class Market:
     active: bool
     tokens: list[dict]
     url: str = ""
+    rules: str = ""
+    resolution_source: str = ""
+    tick_size: str = "0.01"
+    neg_risk: bool = False
 
     @property
     def implied_probability(self) -> float:
@@ -68,75 +73,151 @@ def fetch_active_markets(limit: int = 50) -> list[Market]:
 
     items = data if isinstance(data, list) else data.get("data", [])
 
-    for m in items:
-        try:
-            # Gamma API uses outcomePrices as a JSON string
-            outcome_prices = m.get("outcomePrices", "")
-            yes_price = 0.5
-            no_price = 0.5
-
-            if outcome_prices:
-                import json
-                try:
-                    prices = json.loads(outcome_prices) if isinstance(outcome_prices, str) else outcome_prices
-                    if len(prices) >= 2:
-                        yes_price = float(prices[0])
-                        no_price = float(prices[1])
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-            # Also check tokens array
-            tokens = m.get("tokens", m.get("clobTokenIds", []))
-            if isinstance(tokens, str):
-                import json
-                try:
-                    tokens = json.loads(tokens)
-                except json.JSONDecodeError:
-                    tokens = []
-
-            # Build token list for order execution
-            clob_token_ids = m.get("clobTokenIds", "")
-            if isinstance(clob_token_ids, str):
-                import json
-                try:
-                    clob_token_ids = json.loads(clob_token_ids)
-                except json.JSONDecodeError:
-                    clob_token_ids = []
-
-            token_list = []
-            outcomes = ["Yes", "No"]
-            for i, tid in enumerate(clob_token_ids if isinstance(clob_token_ids, list) else []):
-                token_list.append({
-                    "token_id": tid,
-                    "outcome": outcomes[i] if i < len(outcomes) else f"Outcome_{i}",
-                    "price": yes_price if i == 0 else no_price,
-                })
-
-            vol = float(m.get("volume", m.get("volumeNum", 0)) or 0)
-            question = m.get("question", "")
-
-            # Skip resolved or low-info markets
-            if yes_price in (0.0, 1.0) and vol == 0:
-                continue
-
-            markets.append(Market(
-                condition_id=m.get("conditionId", m.get("condition_id", m.get("id", ""))),
-                question=question,
-                category=_infer_category(question, m.get("tags", None) or []),
-                yes_price=yes_price,
-                no_price=no_price,
-                volume=vol,
-                end_date=m.get("endDate", m.get("end_date_iso", "")),
-                active=m.get("active", True),
-                tokens=token_list,
-                url=_build_market_url(m),
-            ))
-        except (KeyError, ValueError, TypeError):
-            continue
+    for item in items:
+        market = _market_from_gamma(item)
+        if market is not None:
+            markets.append(market)
 
     # Sort by volume descending
     markets.sort(key=lambda x: x.volume, reverse=True)
     return markets
+
+
+def fetch_target_markets(
+    queries: list[str] | None = None,
+    limit_per_query: int = 50,
+) -> list[Market]:
+    """Discover active Israel-related markets through Gamma public search."""
+    found: dict[str, Market] = {}
+    for query in queries or config.MARKET_SEARCH_QUERIES:
+        try:
+            response = httpx.get(
+                f"{GAMMA_API}/public-search",
+                params={
+                    "q": query,
+                    "events_status": "active",
+                    "limit_per_type": limit_per_query,
+                    "keep_closed_markets": 0,
+                    "search_profiles": False,
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            events = response.json().get("events", [])
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            print(f"[markets] Search failed for {query!r}: {type(exc).__name__}")
+            continue
+
+        for event in events or []:
+            if not isinstance(event, dict) or event.get("closed"):
+                continue
+            event_slug = str(event.get("slug", "")).strip()
+            for raw_market in event.get("markets") or []:
+                if not isinstance(raw_market, dict):
+                    continue
+                if raw_market.get("closed") or not raw_market.get("active", True):
+                    continue
+                if raw_market.get("enableOrderBook") is False:
+                    continue
+                if raw_market.get("acceptingOrders") is False:
+                    continue
+                enriched = dict(raw_market)
+                enriched.setdefault("events", [{"slug": event_slug}])
+                enriched.setdefault(
+                    "resolutionSource",
+                    event.get("resolutionSource", ""),
+                )
+                market = _market_from_gamma(enriched)
+                if (
+                    market is not None
+                    and market.category == "israel"
+                    and market.tokens
+                ):
+                    found[market.condition_id] = market
+
+    return sorted(found.values(), key=lambda market: market.volume, reverse=True)
+
+
+def _market_from_gamma(data: dict) -> Market | None:
+    """Convert one Gamma market response into the internal model."""
+    import json
+
+    try:
+        outcome_prices = data.get("outcomePrices", "")
+        yes_price = 0.5
+        no_price = 0.5
+        if outcome_prices:
+            try:
+                prices = (
+                    json.loads(outcome_prices)
+                    if isinstance(outcome_prices, str)
+                    else outcome_prices
+                )
+                if len(prices) >= 2:
+                    yes_price = float(prices[0])
+                    no_price = float(prices[1])
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+
+        clob_token_ids = data.get("clobTokenIds", "")
+        if isinstance(clob_token_ids, str):
+            try:
+                clob_token_ids = json.loads(clob_token_ids)
+            except json.JSONDecodeError:
+                clob_token_ids = []
+
+        token_list = []
+        outcomes = ["Yes", "No"]
+        for index, token_id in enumerate(
+            clob_token_ids if isinstance(clob_token_ids, list) else []
+        ):
+            token_list.append(
+                {
+                    "token_id": token_id,
+                    "outcome": (
+                        outcomes[index]
+                        if index < len(outcomes)
+                        else f"Outcome_{index}"
+                    ),
+                    "price": yes_price if index == 0 else no_price,
+                }
+            )
+
+        volume = float(data.get("volume", data.get("volumeNum", 0)) or 0)
+        question = str(data.get("question", "") or "")
+        condition_id = str(
+            data.get("conditionId", data.get("condition_id", data.get("id", "")))
+            or ""
+        )
+        if not question or not condition_id:
+            return None
+        if yes_price in (0.0, 1.0) and volume == 0:
+            return None
+
+        return Market(
+            condition_id=condition_id,
+            question=question,
+            category=_infer_category(question, data.get("tags", None) or []),
+            yes_price=yes_price,
+            no_price=no_price,
+            volume=volume,
+            end_date=data.get("endDate", data.get("end_date_iso", "")),
+            active=bool(data.get("active", True)),
+            tokens=token_list,
+            url=_build_market_url(data),
+            rules=str(data.get("description", data.get("rules", "")) or ""),
+            resolution_source=str(data.get("resolutionSource", "") or ""),
+            tick_size=str(
+                data.get(
+                    "orderPriceMinTickSize",
+                    data.get("orderMinPriceTickSize", "0.01"),
+                )
+                or "0.01"
+            ),
+            neg_risk=bool(data.get("negRisk", False)),
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
 
 
 def _fetch_from_clob(limit: int) -> list[Market]:
@@ -180,6 +261,12 @@ def _fetch_from_clob(limit: int) -> list[Market]:
                 active=m.get("active", True),
                 tokens=tokens,
                 url=_build_market_url(m),
+                rules=str(m.get("description", m.get("rules", "")) or ""),
+                resolution_source=str(
+                    m.get("resolution_source", m.get("resolutionSource", "")) or ""
+                ),
+                tick_size=str(m.get("minimum_tick_size", "0.01") or "0.01"),
+                neg_risk=bool(m.get("neg_risk", m.get("negRisk", False))),
             ))
         except (KeyError, ValueError):
             continue
@@ -193,31 +280,45 @@ def _infer_category(question: str, tags: list) -> str:
     tag_str = " ".join(str(t).lower() for t in tags)
     combined = f"{q} {tag_str}"
 
-    if any(kw in combined for kw in ["ai", "artificial intelligence", "openai", "chatgpt", "llm", "google ai", "anthropic"]):
+    def contains_any(keywords: list[str]) -> bool:
+        return any(
+            re.search(
+                rf"(?<![a-z0-9_]){re.escape(keyword)}(?![a-z0-9_])",
+                combined,
+            )
+            for keyword in keywords
+        )
+
+    if contains_any([
+        "israel", "israeli", "netanyahu", "gaza", "hamas", "hezbollah",
+        "west bank", "jerusalem", "knesset", "idf", "iran",
+    ]):
+        return "israel"
+    if contains_any(["ai", "artificial intelligence", "openai", "chatgpt", "llm", "google ai", "anthropic"]):
         return "ai"
-    if any(kw in combined for kw in ["bitcoin", "ethereum", "crypto", "blockchain", "defi", "token"]):
+    if contains_any(["bitcoin", "ethereum", "crypto", "blockchain", "defi", "token"]):
         return "crypto"
-    if any(kw in combined for kw in [
+    if contains_any([
         "federal reserve", "fed rate", "interest rate", "inflation", "cpi",
         "gdp", "unemployment", "recession", "jobs report", "central bank",
         "tariff",
     ]):
         return "economics"
-    if any(kw in combined for kw in [
+    if contains_any([
         "war", "ceasefire", "sanction", "nato", "taiwan", "ukraine",
         "russia", "china", "israel", "iran", "gaza",
     ]):
         return "geopolitics"
-    if any(kw in combined for kw in [
+    if contains_any([
         "fda", "vaccine", "pandemic", "disease", "drug approval",
         "clinical trial", "world health organization",
     ]):
         return "health"
-    if any(kw in combined for kw in ["election", "president", "congress", "senate", "trump", "biden", "political"]):
+    if contains_any(["election", "president", "congress", "senate", "trump", "biden", "political"]):
         return "politics"
-    if any(kw in combined for kw in ["spacex", "nasa", "climate", "research", "study", "discovery"]):
+    if contains_any(["spacex", "nasa", "climate", "research", "study", "discovery"]):
         return "science"
-    if any(kw in combined for kw in ["tech", "apple", "google", "microsoft", "software", "startup"]):
+    if contains_any(["tech", "apple", "google", "microsoft", "software", "startup"]):
         return "technology"
     return "other"
 
@@ -237,9 +338,9 @@ def get_token_id(market: Market, side: str) -> str | None:
 
 
 if __name__ == "__main__":
-    all_markets = fetch_active_markets(limit=20)
-    filtered = filter_by_categories(all_markets)
-    print(f"\n--- {len(filtered)} markets in target categories (of {len(all_markets)} total) ---\n")
+    targeted_markets = fetch_target_markets()
+    filtered = filter_by_categories(targeted_markets)
+    print(f"\n--- {len(filtered)} Israel-focused markets ---\n")
     for m in filtered[:15]:
         print(f"  [{m.category}] {m.question}")
         print(f"    YES: {m.yes_price:.2f} | NO: {m.no_price:.2f} | Vol: ${m.volume:,.0f}")

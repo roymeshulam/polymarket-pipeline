@@ -26,6 +26,19 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+
+def _configure_utf8_streams() -> None:
+    """Ensure Hebrew output works in Windows terminals and redirected logs."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
+_configure_utf8_streams()
 console = Console()
 
 
@@ -140,10 +153,9 @@ def cmd_calibrate(args):
 def cmd_niche(args):
     """Browse niche markets only (volume-filtered)."""
     import config
-    from markets import fetch_active_markets, filter_by_categories
+    from markets import fetch_target_markets
 
-    all_markets = fetch_active_markets(limit=200)
-    categorized = filter_by_categories(all_markets)
+    categorized = fetch_target_markets()
     niche = [
         m for m in categorized
         if config.MIN_VOLUME_USD <= m.volume <= config.MAX_VOLUME_USD
@@ -192,7 +204,15 @@ def cmd_verify(args):
 
     # 2. Dependencies
     deps_ok = True
-    for mod in ["openai", "feedparser", "httpx", "rich", "dotenv", "websockets", "tweepy", "aiohttp"]:
+    for mod in [
+        "openai",
+        "feedparser",
+        "httpx",
+        "rich",
+        "dotenv",
+        "websockets",
+        "py_clob_client_v2",
+    ]:
         try:
             __import__(mod)
         except ImportError:
@@ -233,37 +253,46 @@ def cmd_verify(args):
         console.print(f"  [red]FAIL[/red]  OpenAI API key not set")
         all_good = False
 
-    # 5. News scraper (RSS)
+    # 5. Source-policy configuration
     try:
-        from scraper import scrape_rss
-        items = scrape_rss(config.RSS_FEEDS[0], 12)
-        console.print(f"  [bright_green]PASS[/bright_green]  RSS scraper ({len(items)} headlines)")
+        from source_config import profiles_by_kind
+
+        enabled = [profile for profile in config.SOURCE_PROFILES if profile.enabled]
+        console.print(
+            f"  [bright_green]PASS[/bright_green]  Source policies "
+            f"({len(enabled)} enabled / {len(config.SOURCE_PROFILES)} configured)"
+        )
+        rss_profiles = profiles_by_kind(config.SOURCE_PROFILES, "rss")
+        if rss_profiles:
+            from scraper import scrape_rss_profile
+
+            items = scrape_rss_profile(rss_profiles[0])
+            console.print(
+                f"  [bright_green]PASS[/bright_green]  "
+                f"RSS {rss_profiles[0].source_id} ({len(items)} recent items)"
+            )
     except Exception as e:
-        console.print(f"  [yellow]WARN[/yellow]  RSS scraper — {e}")
+        console.print(f"  [yellow]WARN[/yellow]  Source ingestion — {type(e).__name__}: {e}")
 
-    # 6. Twitter API (optional)
-    has_twitter = bool(config.TWITTER_BEARER_TOKEN)
-    if has_twitter:
-        console.print(f"  [bright_green]PASS[/bright_green]  Twitter bearer token set")
+    # 6. Optional adapter credentials
+    twitter_enabled = any(
+        profile.enabled and profile.kind == "twitter"
+        for profile in config.SOURCE_PROFILES
+    )
+    telegram_enabled = any(
+        profile.enabled and profile.kind == "telegram"
+        for profile in config.SOURCE_PROFILES
+    )
+    if twitter_enabled and not config.TWITTER_BEARER_TOKEN:
+        console.print("[red]FAIL[/red]  Enabled X sources require TWITTER_BEARER_TOKEN")
+        all_good = False
     else:
-        console.print(f"  [dim]SKIP[/dim]  Twitter API (optional — enables real-time news stream)")
-
-    # 7. Telegram (optional)
-    has_telegram = bool(config.TELEGRAM_BOT_TOKEN)
-    if has_telegram:
-        console.print(f"  [bright_green]PASS[/bright_green]  Telegram bot token set")
-        if config.TELEGRAM_ALERT_CHAT_ID:
-            console.print(
-                "  [bright_green]PASS[/bright_green]  "
-                "Telegram edge-trade alerts configured"
-            )
-        else:
-            console.print(
-                "  [dim]SKIP[/dim]  Telegram edge-trade alerts "
-                "(TELEGRAM_ALERT_CHAT_ID not set)"
-            )
+        console.print("[bright_green]PASS[/bright_green]  X source configuration")
+    if telegram_enabled and not config.TELEGRAM_BOT_TOKEN:
+        console.print("[red]FAIL[/red]  Enabled Telegram sources require TELEGRAM_BOT_TOKEN")
+        all_good = False
     else:
-        console.print(f"  [dim]SKIP[/dim]  Telegram bot (optional — enables channel monitoring)")
+        console.print("[bright_green]PASS[/bright_green]  Telegram source configuration")
 
     # 8. Polymarket API
     try:
@@ -275,9 +304,9 @@ def cmd_verify(args):
 
     # 9. Niche market filter
     try:
-        from markets import fetch_active_markets, filter_by_categories
-        all_m = fetch_active_markets(limit=100)
-        cat = filter_by_categories(all_m)
+        from markets import fetch_target_markets
+        all_m = fetch_target_markets()
+        cat = all_m
         niche = [m for m in cat if config.MIN_VOLUME_USD <= m.volume <= config.MAX_VOLUME_USD]
         console.print(f"  [bright_green]PASS[/bright_green]  Niche filter ({len(niche)} markets in range)")
     except Exception as e:
@@ -338,10 +367,10 @@ def cmd_scrape(args):
 
 
 def cmd_markets(args):
-    from markets import fetch_active_markets, filter_by_categories
+    from markets import fetch_target_markets
 
-    all_markets = fetch_active_markets(limit=args.max)
-    markets = filter_by_categories(all_markets)
+    all_markets = fetch_target_markets(limit_per_query=args.max)
+    markets = all_markets[:args.max]
 
     console.print(f"\n[bold]{len(markets)} markets in target categories[/bold] (of {len(all_markets)} fetched)\n")
 

@@ -40,8 +40,14 @@ def test_reservations_enforce_limit_atomically(monkeypatch, tmp_path):
     assert logger.reserve_exposure(5, 10, 10) is None
 
 
-def test_news_freshness_uses_publication_time(monkeypatch):
-    monkeypatch.setattr(config, "MAX_NEWS_AGE_SECONDS", 60)
+def test_news_freshness_uses_source_policy():
     now = datetime.now(timezone.utc)
-    event = NewsEvent("h", "rss", "", now, now - timedelta(seconds=61))
+    event = NewsEvent(
+        "h",
+        "rss",
+        "",
+        now,
+        now - timedelta(seconds=61),
+        max_age_seconds=60,
+    )
     assert not event.is_fresh()

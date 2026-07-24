@@ -1,13 +1,14 @@
+"""RSS ingestion helpers driven by per-source editorial policies."""
 from __future__ import annotations
 
-import time
-from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import feedparser
 import httpx
 
 import config
+from source_config import SourceProfile, profiles_by_kind
 
 
 @dataclass
@@ -17,28 +18,43 @@ class NewsItem:
     url: str
     published_at: datetime
     summary: str = ""
+    source_id: str = ""
+    language: str = "he"
 
     def age_hours(self) -> float:
         delta = datetime.now(timezone.utc) - self.published_at
         return delta.total_seconds() / 3600
 
 
-def scrape_rss(feed_url: str, lookback_hours: int) -> list[NewsItem]:
-    """Parse a single RSS feed and return recent items."""
-    items = []
+def scrape_rss(
+    feed_url: str,
+    lookback_hours: float,
+    *,
+    source_name: str = "",
+    source_id: str = "",
+    language: str = "he",
+) -> list[NewsItem]:
+    """Parse one RSS/Atom feed and return recent items."""
     try:
-        feed = feedparser.parse(feed_url)
-    except Exception:
-        return items
+        response = httpx.get(
+            feed_url,
+            headers={"User-Agent": "IsraelEventIntelligence/1.0 (+RSS reader)"},
+            follow_redirects=True,
+            timeout=15,
+        )
+        response.raise_for_status()
+        feed = feedparser.parse(response.content)
+    except (httpx.HTTPError, OSError, ValueError):
+        return []
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-    source_name = feed.feed.get("title", feed_url)
+    resolved_name = source_name or feed.feed.get("title", feed_url)
+    items: list[NewsItem] = []
 
     for entry in feed.entries:
-        published = None
-        if hasattr(entry, "published_parsed") and entry.published_parsed:
+        if getattr(entry, "published_parsed", None):
             published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-        elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
+        elif getattr(entry, "updated_parsed", None):
             published = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
         else:
             published = datetime.now(timezone.utc)
@@ -46,68 +62,46 @@ def scrape_rss(feed_url: str, lookback_hours: int) -> list[NewsItem]:
         if published < cutoff:
             continue
 
-        items.append(NewsItem(
-            headline=entry.get("title", "").strip(),
-            source=source_name,
-            url=entry.get("link", ""),
-            published_at=published,
-            summary=entry.get("summary", "")[:500],
-        ))
-
-    return items
-
-
-def scrape_newsapi(query: str, lookback_hours: int) -> list[NewsItem]:
-    """Pull from NewsAPI.org if key is configured."""
-    if not config.NEWSAPI_KEY:
-        return []
-
-    items = []
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-    from_dt = cutoff.strftime("%Y-%m-%dT%H:%M:%S")
-
-    try:
-        resp = httpx.get(
-            "https://newsapi.org/v2/everything",
-            params={
-                "q": query,
-                "from": from_dt,
-                "sortBy": "publishedAt",
-                "language": "en",
-                "pageSize": 50,
-                "apiKey": config.NEWSAPI_KEY,
-            },
-            timeout=15,
+        headline = entry.get("title", "").strip()
+        if not headline:
+            continue
+        items.append(
+            NewsItem(
+                headline=headline,
+                source=resolved_name,
+                source_id=source_id,
+                language=language,
+                url=entry.get("link", ""),
+                published_at=published,
+                summary=entry.get("summary", "")[:1000],
+            )
         )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception:
-        return items
-
-    for article in data.get("articles", []):
-        pub_str = article.get("publishedAt", "")
-        try:
-            published = datetime.fromisoformat(pub_str.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
-            published = datetime.now(timezone.utc)
-
-        items.append(NewsItem(
-            headline=article.get("title", "").strip(),
-            source=article.get("source", {}).get("name", "NewsAPI"),
-            url=article.get("url", ""),
-            published_at=published,
-            summary=(article.get("description") or "")[:500],
-        ))
-
     return items
+
+
+def scrape_rss_profile(
+    profile: SourceProfile,
+    lookback_hours: float | None = None,
+) -> list[NewsItem]:
+    """Scrape one configured RSS profile."""
+    hours = lookback_hours
+    if hours is None:
+        hours = max(profile.max_age_seconds / 3600, 1 / 60)
+    return scrape_rss(
+        profile.url,
+        hours,
+        source_name=profile.name,
+        source_id=profile.source_id,
+        language=profile.language,
+    )
 
 
 def deduplicate(items: list[NewsItem]) -> list[NewsItem]:
-    """Remove near-duplicate headlines by normalized prefix matching."""
-    seen = set()
-    unique = []
+    """Remove repeats from the same source while preserving corroboration."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[NewsItem] = []
     for item in items:
-        key = item.headline.lower()[:80]
+        key = (item.source_id or item.source, item.headline.lower()[:120])
         if key not in seen:
             seen.add(key)
             unique.append(item)
@@ -115,25 +109,17 @@ def deduplicate(items: list[NewsItem]) -> list[NewsItem]:
 
 
 def scrape_all(lookback_hours: int | None = None) -> list[NewsItem]:
-    """Run all scrapers and return deduplicated, sorted results."""
-    hours = lookback_hours or config.NEWS_LOOKBACK_HOURS
-    all_items = []
-
-    for feed_url in config.RSS_FEEDS:
-        all_items.extend(scrape_rss(feed_url, hours))
-        time.sleep(0.5)  # polite crawling
-
-    # NewsAPI broad query
-    all_items.extend(scrape_newsapi("AI OR artificial intelligence OR crypto OR blockchain", hours))
-
-    unique = deduplicate(all_items)
-    unique.sort(key=lambda x: x.published_at, reverse=True)
+    """Scrape all enabled RSS profiles for synchronous inspection."""
+    items: list[NewsItem] = []
+    for profile in profiles_by_kind(config.SOURCE_PROFILES, "rss"):
+        items.extend(scrape_rss_profile(profile, lookback_hours))
+    unique = deduplicate(items)
+    unique.sort(key=lambda item: item.published_at, reverse=True)
     return unique
 
 
 if __name__ == "__main__":
-    items = scrape_all()
-    print(f"\n--- Scraped {len(items)} unique headlines ---\n")
-    for item in items[:20]:
-        age = item.age_hours()
-        print(f"  [{age:.1f}h ago] [{item.source}] {item.headline}")
+    news = scrape_all()
+    print(f"\n--- Scraped {len(news)} unique headlines ---\n")
+    for item in news[:20]:
+        print(f"  [{item.age_hours():.1f}h] [{item.source_id}] {item.headline}")

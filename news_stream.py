@@ -1,20 +1,20 @@
-"""
-Real-time news monitor — event-driven architecture.
-Sources: Twitter API v2 filtered stream, Telegram channels, RSS fallback.
-Emits NewsEvent objects into an asyncio queue as breaking news arrives.
-"""
+"""Policy-driven RSS, X, and Telegram ingestion for Hebrew news."""
 from __future__ import annotations
 
 import asyncio
-import time
+import json
 import logging
-from datetime import datetime, timezone, timedelta
+import time
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import httpx
 
 import config
-from scraper import scrape_all, NewsItem
+from matcher import event_fingerprint, normalize_text
+from scraper import scrape_rss_profile
+from source_config import SourceProfile, profile_map, profiles_by_kind
 
 log = logging.getLogger(__name__)
 
@@ -22,44 +22,111 @@ log = logging.getLogger(__name__)
 @dataclass
 class NewsEvent:
     headline: str
-    source: str  # "twitter", "telegram", "rss"
+    source: str  # adapter kind: rss, twitter, telegram
     url: str
     received_at: datetime
     published_at: datetime
     summary: str = ""
     raw_data: dict = field(default_factory=dict)
-    latency_ms: int = 0  # time from publication to our receipt
+    latency_ms: int = 0
+    source_id: str = ""
+    source_name: str = ""
+    independence_group: str = ""
+    language: str = "he"
+    relevance: float = 0.5
+    trust_tier: int = 3
+    max_age_seconds: int = 300
+    required_confirmations: int = 2
+    confirmation_count: int = 1
+    allow_live: bool = False
+    topics: tuple[str, ...] = field(default_factory=tuple)
 
     def age_seconds(self) -> float:
-        return max(0.0, (datetime.now(timezone.utc) - self.published_at).total_seconds())
+        return max(
+            0.0,
+            (datetime.now(timezone.utc) - self.published_at).total_seconds(),
+        )
 
     def is_fresh(self) -> bool:
-        """Whether the source publication time is recent enough to trade."""
-        return self.age_seconds() <= config.MAX_NEWS_AGE_SECONDS
+        """Apply this source's own validity window."""
+        return self.age_seconds() <= self.max_age_seconds
+
+    def is_confirmed(self) -> bool:
+        return self.confirmation_count >= self.required_confirmations
+
+    def is_live_eligible(self) -> bool:
+        return self.allow_live and self.is_fresh() and self.is_confirmed()
+
+
+def _event_from_profile(
+    profile: SourceProfile,
+    *,
+    headline: str,
+    url: str,
+    published_at: datetime,
+    summary: str = "",
+    raw_data: dict | None = None,
+) -> NewsEvent:
+    now = datetime.now(timezone.utc)
+    return NewsEvent(
+        headline=headline,
+        source=profile.kind,
+        source_id=profile.source_id,
+        source_name=profile.name,
+        independence_group=profile.independence_group,
+        language=profile.language,
+        url=url,
+        received_at=now,
+        published_at=published_at,
+        summary=summary,
+        raw_data=raw_data or {},
+        latency_ms=max(0, int((now - published_at).total_seconds() * 1000)),
+        relevance=profile.relevance,
+        trust_tier=profile.trust_tier,
+        max_age_seconds=profile.max_age_seconds,
+        required_confirmations=profile.min_confirmations,
+        allow_live=profile.allow_live,
+        topics=profile.topics,
+    )
 
 
 class TwitterStream:
-    """Twitter API v2 filtered stream for real-time keyword monitoring."""
+    """X API v2 filtered stream with one tagged rule per source profile."""
 
-    def __init__(self, bearer_token: str, keywords: list[str]):
+    def __init__(
+        self,
+        bearer_token: str,
+        profiles: list[SourceProfile] | list[str],
+    ):
         self.bearer_token = bearer_token
-        self.keywords = keywords
-        self.base_url = "https://api.twitter.com/2"
-        self.enabled = bool(bearer_token)
+        # Preserve the small rate-limit unit tests that construct keyword lists.
+        if profiles and isinstance(profiles[0], str):
+            profiles = [
+                SourceProfile(
+                    source_id="legacy_test",
+                    kind="twitter",
+                    name="Legacy test rule",
+                    enabled=True,
+                    query=" OR ".join(f'"{value}"' for value in profiles),
+                )
+            ]
+        self.profiles: list[SourceProfile] = list(profiles)
+        self._profiles = profile_map(self.profiles)
+        self.base_url = "https://api.x.com/2"
+        self.rule_tag_prefix = "israel_pipeline:"
+        self.enabled = bool(bearer_token) and bool(self.profiles)
 
-    def _headers(self) -> dict:
+    def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.bearer_token}"}
 
     @staticmethod
     def _rate_limit_delay(response: httpx.Response, fallback: int) -> int:
-        """Return a bounded delay from X rate-limit response headers."""
         retry_after = response.headers.get("retry-after")
         if retry_after:
             try:
                 return max(1, min(900, int(float(retry_after))))
             except ValueError:
                 pass
-
         reset_at = response.headers.get("x-rate-limit-reset")
         if reset_at:
             try:
@@ -67,60 +134,65 @@ class TwitterStream:
                 return max(1, min(900, remaining))
             except ValueError:
                 pass
-
         return max(60, min(900, fallback))
 
-    async def setup_rules(self):
-        """Set up filtered stream rules based on keywords."""
+    async def setup_rules(self) -> None:
         if not self.enabled:
             return
-
         async with httpx.AsyncClient() as client:
-            # Get existing rules
-            resp = await client.get(
+            response = await client.get(
                 f"{self.base_url}/tweets/search/stream/rules",
                 headers=self._headers(),
-                timeout=10,
+                timeout=15,
             )
-            existing = resp.json().get("data", [])
-
-            # Delete existing rules
-            if existing:
-                ids = [r["id"] for r in existing]
-                await client.post(
+            response.raise_for_status()
+            existing = response.json().get("data", [])
+            managed_ids = [
+                rule["id"]
+                for rule in existing
+                if str(rule.get("tag", "")).startswith(self.rule_tag_prefix)
+            ]
+            if managed_ids:
+                deletion = await client.post(
                     f"{self.base_url}/tweets/search/stream/rules",
                     headers=self._headers(),
-                    json={"delete": {"ids": ids}},
-                    timeout=10,
+                    json={"delete": {"ids": managed_ids}},
+                    timeout=15,
                 )
+                deletion.raise_for_status()
 
-            # Batch keywords into comfortably sized filtered-stream rules.
-            rules = []
-            # Batch keywords into OR groups
-            batch_size = 10
-            for i in range(0, len(self.keywords), batch_size):
-                batch = self.keywords[i:i + batch_size]
-                value = " OR ".join(f'"{kw}"' for kw in batch)
-                rules.append({"value": value, "tag": f"batch_{i // batch_size}"})
+            rules = [
+                {
+                    "value": profile.query,
+                    "tag": f"{self.rule_tag_prefix}{profile.source_id}",
+                }
+                for profile in self.profiles
+            ]
+            addition = await client.post(
+                f"{self.base_url}/tweets/search/stream/rules",
+                headers=self._headers(),
+                json={"add": rules},
+                timeout=15,
+            )
+            addition.raise_for_status()
 
-            if rules:
-                await client.post(
-                    f"{self.base_url}/tweets/search/stream/rules",
-                    headers=self._headers(),
-                    json={"add": rules},
-                    timeout=10,
-                )
+    def _matching_profile(self, payload: dict) -> SourceProfile | None:
+        tags = {
+            str(rule.get("tag", "")).removeprefix(self.rule_tag_prefix)
+            for rule in payload.get("matching_rules", [])
+            if isinstance(rule, dict)
+        }
+        matches = [self._profiles[tag] for tag in tags if tag in self._profiles]
+        return max(matches, key=lambda item: item.relevance) if matches else None
 
-    async def stream(self, queue: asyncio.Queue):
-        """Connect to filtered stream and emit NewsEvents."""
+    async def stream(self, queue: asyncio.Queue) -> None:
         if not self.enabled:
-            log.info("[twitter] No bearer token — stream disabled")
+            log.info("[twitter] No enabled profiles or bearer token")
             return
-
         try:
             await self.setup_rules()
-        except Exception as e:
-            log.warning(f"[twitter] Failed to setup rules: {e}")
+        except Exception as exc:
+            log.warning("[twitter] Rule setup failed: %s", type(exc).__name__)
             return
 
         backoff = 1
@@ -133,176 +205,168 @@ class TwitterStream:
                         headers=self._headers(),
                         params={"tweet.fields": "created_at,author_id,text"},
                         timeout=None,
-                    ) as resp:
-                        if resp.status_code == 429:
-                            delay = self._rate_limit_delay(resp, backoff)
-                            log.warning(
-                                "[twitter] Rate limited; reconnecting in %ss",
-                                delay,
-                            )
+                    ) as response:
+                        if response.status_code == 429:
+                            delay = self._rate_limit_delay(response, backoff)
                             await asyncio.sleep(delay)
                             backoff = min(max(backoff * 2, delay), 900)
                             continue
-
-                        resp.raise_for_status()
+                        response.raise_for_status()
                         backoff = 1
-                        async for line in resp.aiter_lines():
+                        async for line in response.aiter_lines():
                             if not line.strip():
                                 continue
                             try:
-                                import json
-                                data = json.loads(line)
-                                tweet = data.get("data", {})
-                                text = tweet.get("text", "")
+                                payload = json.loads(line)
+                                profile = self._matching_profile(payload)
+                                tweet = payload.get("data", {})
+                                if profile is None or not tweet.get("text"):
+                                    continue
                                 created = tweet.get("created_at", "")
-
-                                now = datetime.now(timezone.utc)
                                 try:
-                                    pub = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                                    latency = int((now - pub).total_seconds() * 1000)
+                                    published = datetime.fromisoformat(
+                                        created.replace("Z", "+00:00")
+                                    )
                                 except (ValueError, AttributeError):
-                                    pub = now
-                                    latency = 0
-
-                                event = NewsEvent(
-                                    headline=text[:280],
-                                    source="twitter",
-                                    url=f"https://twitter.com/i/status/{tweet.get('id', '')}",
-                                    received_at=now,
-                                    published_at=pub,
-                                    latency_ms=latency,
-                                    raw_data=data,
+                                    published = datetime.now(timezone.utc)
+                                await queue.put(
+                                    _event_from_profile(
+                                        profile,
+                                        headline=tweet["text"][:1000],
+                                        url=f"https://x.com/i/status/{tweet.get('id', '')}",
+                                        published_at=published,
+                                        raw_data=payload,
+                                    )
                                 )
-                                await queue.put(event)
-                            except Exception as e:
-                                log.debug(f"[twitter] Parse error: {e}")
-
-            except (httpx.HTTPError, Exception) as e:
-                log.warning(f"[twitter] Stream error: {e}, reconnecting in {backoff}s")
+                            except (ValueError, TypeError, KeyError) as exc:
+                                log.debug("[twitter] Parse error: %s", type(exc).__name__)
+            except Exception as exc:
+                log.warning(
+                    "[twitter] Stream error %s; reconnecting in %ss",
+                    type(exc).__name__,
+                    backoff,
+                )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
 
 
 class TelegramMonitor:
-    """Monitor Telegram channels via Bot API long polling."""
+    """Monitor explicitly configured channels through the Telegram Bot API."""
 
-    def __init__(self, bot_token: str, channel_ids: list[str]):
+    def __init__(self, bot_token: str, profiles: list[SourceProfile]):
         self.bot_token = bot_token
-        self.channel_ids = channel_ids
-        self.enabled = bool(bot_token) and bool(channel_ids)
+        self.profiles = {profile.channel_id: profile for profile in profiles}
+        self.enabled = bool(bot_token) and bool(self.profiles)
         self.last_update_id = 0
 
-    async def stream(self, queue: asyncio.Queue):
-        """Poll for new messages and emit NewsEvents."""
+    async def stream(self, queue: asyncio.Queue) -> None:
         if not self.enabled:
-            log.info("[telegram] No bot token or channels — monitor disabled")
+            log.info("[telegram] No enabled profiles or bot token")
             return
-
         base_url = f"https://api.telegram.org/bot{self.bot_token}"
 
         while True:
             try:
                 async with httpx.AsyncClient() as client:
-                    resp = await client.get(
+                    response = await client.get(
                         f"{base_url}/getUpdates",
                         params={"offset": self.last_update_id + 1, "timeout": 30},
                         timeout=35,
                     )
-                    data = resp.json()
-
-                for update in data.get("result", []):
+                    response.raise_for_status()
+                    payload = response.json()
+                for update in payload.get("result", []):
                     self.last_update_id = update["update_id"]
-                    msg = update.get("channel_post") or update.get("message", {})
-                    text = msg.get("text", "")
-                    chat_id = str(msg.get("chat", {}).get("id", ""))
-
-                    if not text or (self.channel_ids and chat_id not in self.channel_ids):
+                    message = update.get("channel_post") or update.get("message") or {}
+                    chat_id = str(message.get("chat", {}).get("id", ""))
+                    profile = self.profiles.get(chat_id)
+                    text = message.get("text") or message.get("caption") or ""
+                    if profile is None or not text:
                         continue
-
-                    now = datetime.now(timezone.utc)
-                    msg_date = msg.get("date", 0)
-                    pub = datetime.fromtimestamp(msg_date, tz=timezone.utc) if msg_date else now
-                    latency = int((now - pub).total_seconds() * 1000)
-
-                    event = NewsEvent(
-                        headline=text[:500],
-                        source="telegram",
-                        url="",
-                        received_at=now,
-                        published_at=pub,
-                        latency_ms=latency,
-                        raw_data=update,
+                    timestamp = message.get("date")
+                    published = (
+                        datetime.fromtimestamp(timestamp, tz=timezone.utc)
+                        if timestamp
+                        else datetime.now(timezone.utc)
                     )
-                    await queue.put(event)
-
-            except Exception as e:
-                # Never stringify HTTP errors: request URLs contain the bot token.
-                log.warning("[telegram] Request failed: %s", type(e).__name__)
+                    message_id = message.get("message_id", "")
+                    username = message.get("chat", {}).get("username", "")
+                    url = (
+                        f"https://t.me/{username}/{message_id}"
+                        if username and message_id
+                        else ""
+                    )
+                    await queue.put(
+                        _event_from_profile(
+                            profile,
+                            headline=text[:1500],
+                            url=url,
+                            published_at=published,
+                            raw_data=update,
+                        )
+                    )
+            except Exception as exc:
+                # Never print an exception containing the bot-token URL.
+                log.warning("[telegram] Request failed: %s", type(exc).__name__)
                 await asyncio.sleep(5)
 
 
-class RSSFallback:
-    """Periodic RSS scraping as a fallback news source."""
+class RSSStream:
+    """Poll one RSS profile at its own configured interval."""
 
-    def __init__(self, interval_seconds: float = 120):
-        self.interval = interval_seconds
-        self._seen_headlines: set[str] = set()
+    def __init__(self, profile: SourceProfile):
+        self.profile = profile
+        self._seen: set[str] = set()
 
-    async def stream(self, queue: asyncio.Queue):
-        """Poll RSS feeds periodically and emit new headlines."""
+    async def stream(self, queue: asyncio.Queue) -> None:
         while True:
             try:
-                items = await asyncio.get_event_loop().run_in_executor(
-                    None, scrape_all
+                items = await asyncio.get_running_loop().run_in_executor(
+                    None, scrape_rss_profile, self.profile
                 )
-                now = datetime.now(timezone.utc)
-                new_count = 0
-
                 for item in items:
-                    key = item.headline.lower()[:80]
-                    if key in self._seen_headlines:
+                    key = normalize_text(item.url or item.headline)
+                    if key in self._seen:
                         continue
-                    self._seen_headlines.add(key)
-                    new_count += 1
-
-                    latency = int((now - item.published_at).total_seconds() * 1000)
-
-                    event = NewsEvent(
-                        headline=item.headline,
-                        source="rss",
-                        url=item.url,
-                        received_at=now,
-                        published_at=item.published_at,
-                        summary=item.summary,
-                        latency_ms=latency,
+                    self._seen.add(key)
+                    await queue.put(
+                        _event_from_profile(
+                            self.profile,
+                            headline=item.headline,
+                            url=item.url,
+                            published_at=item.published_at,
+                            summary=item.summary,
+                        )
                     )
-                    await queue.put(event)
-
-                if new_count:
-                    log.info(f"[rss] {new_count} new headlines")
-
-                # Trim seen cache
-                if len(self._seen_headlines) > 5000:
-                    self._seen_headlines = set(list(self._seen_headlines)[-2000:])
-
-            except Exception as e:
-                log.warning(f"[rss] Error: {e}")
-
-            await asyncio.sleep(self.interval)
+                if len(self._seen) > 5000:
+                    self._seen = set(list(self._seen)[-2000:])
+            except Exception as exc:
+                log.warning(
+                    "[rss:%s] Poll failed: %s",
+                    self.profile.source_id,
+                    type(exc).__name__,
+                )
+            await asyncio.sleep(self.profile.poll_interval_seconds)
 
 
 class NewsAggregator:
-    """Runs all news sources concurrently, deduplicates, emits to output queue."""
+    """Run adapters, apply source policy, corroborate, and deduplicate events."""
 
     def __init__(self, output_queue: asyncio.Queue):
         self.output_queue = output_queue
         self._internal_queue: asyncio.Queue = asyncio.Queue()
-        self._seen: set[str] = set()
+        self._seen: set[tuple[str, str]] = set()
+        self._corroboration: dict[str, deque[tuple[float, str]]] = defaultdict(deque)
 
-        self.twitter = TwitterStream(config.TWITTER_BEARER_TOKEN, config.TWITTER_KEYWORDS)
-        self.telegram = TelegramMonitor(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHANNEL_IDS)
-        self.rss = RSSFallback(interval_seconds=120)
-
+        self.twitter_profiles = profiles_by_kind(config.SOURCE_PROFILES, "twitter")
+        self.telegram_profiles = profiles_by_kind(config.SOURCE_PROFILES, "telegram")
+        self.rss_profiles = profiles_by_kind(config.SOURCE_PROFILES, "rss")
+        self.twitter = TwitterStream(config.TWITTER_BEARER_TOKEN, self.twitter_profiles)
+        self.telegram = TelegramMonitor(
+            config.TELEGRAM_BOT_TOKEN,
+            self.telegram_profiles,
+        )
+        self.rss_streams = [RSSStream(profile) for profile in self.rss_profiles]
         self.stats = {
             "twitter": 0,
             "telegram": 0,
@@ -310,51 +374,58 @@ class NewsAggregator:
             "total": 0,
             "deduped": 0,
             "stale": 0,
+            "low_relevance": 0,
+            "unconfirmed": 0,
         }
 
-    async def run(self):
-        """Start all sources and the dedup router."""
-        await asyncio.gather(
+    async def run(self) -> None:
+        tasks = [
             self.twitter.stream(self._internal_queue),
             self.telegram.stream(self._internal_queue),
-            self.rss.stream(self._internal_queue),
-            self._dedup_router(),
-            return_exceptions=True,
-        )
+            *(stream.stream(self._internal_queue) for stream in self.rss_streams),
+            self._policy_router(),
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _dedup_router(self):
-        """Deduplicate and forward events to output queue."""
+    def _confirmation_count(self, event: NewsEvent) -> int:
+        fingerprint = event_fingerprint(event.headline, event.summary)
+        if not fingerprint:
+            return 1
+        now = time.time()
+        cutoff = now - config.CORROBORATION_WINDOW_SECONDS
+        observations = self._corroboration[fingerprint]
+        while observations and observations[0][0] < cutoff:
+            observations.popleft()
+        group = event.independence_group or event.source_id
+        observations.append((now, group))
+        return len({group_id for _, group_id in observations})
+
+    async def _policy_router(self) -> None:
         while True:
-            event = await self._internal_queue.get()
-            key = event.headline.lower()[:80]
-            if key in self._seen:
-                self.stats["deduped"] += 1
-                continue
+            event: NewsEvent = await self._internal_queue.get()
+            event.confirmation_count = self._confirmation_count(event)
 
-            self._seen.add(key)
             if not event.is_fresh():
                 self.stats["stale"] += 1
                 continue
+            if event.relevance < config.MIN_SOURCE_RELEVANCE:
+                self.stats["low_relevance"] += 1
+                continue
 
+            dedup_key = (
+                event.source_id,
+                normalize_text(event.url or event.headline)[:200],
+            )
+            if dedup_key in self._seen:
+                self.stats["deduped"] += 1
+                continue
+            self._seen.add(dedup_key)
+
+            if not event.is_confirmed():
+                self.stats["unconfirmed"] += 1
             self.stats[event.source] = self.stats.get(event.source, 0) + 1
             self.stats["total"] += 1
-
             await self.output_queue.put(event)
 
             if len(self._seen) > 10000:
                 self._seen = set(list(self._seen)[-5000:])
-
-
-if __name__ == "__main__":
-    async def _test():
-        q: asyncio.Queue = asyncio.Queue()
-        agg = NewsAggregator(q)
-
-        async def printer():
-            while True:
-                event = await q.get()
-                print(f"[{event.source}] ({event.latency_ms}ms) {event.headline[:80]}")
-
-        await asyncio.gather(agg.run(), printer())
-
-    asyncio.run(_test())
