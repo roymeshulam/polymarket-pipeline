@@ -24,8 +24,8 @@ Fair-probability comparison → dry-run signal or guarded CLOB V2 order
   sources.
 - Both publishers require independent confirmation and are not authorized for
   live trading or aviation-market routing by default.
-- X and Telegram entries are disabled placeholders until you add reviewed
-  accounts or channels.
+- Optional X, Telegram, and specialist-source templates remain available in
+  `sources.example.json`; `sources.json` contains enabled sources only.
 - Every source has its own maximum actionable age and relevance score.
 - Topical overlap never becomes a signal.
 - Probability evidence can be studied in dry-run mode but cannot trigger a live
@@ -138,9 +138,9 @@ MARKET_SEARCH_QUERIES=Israel,Netanyahu,Gaza,Hamas,Hezbollah,Iran
 Matching is fail-closed: a report and market must share both a named entity and
 a resolution predicate. Specialist domains add another source capability gate.
 For example, an airspace market is considered only for profiles explicitly tagged
-with `"aviation"`. The disabled `official_aviation_rss` profile is a placeholder
-for such a reviewed feed; the general Ynet profile is intentionally not tagged
-for aviation.
+with `"aviation"`. Add a reviewed aviation profile from `sources.example.json`
+when one is available; the general news feeds are intentionally not tagged for
+aviation.
 
 Events that do not meet their source's `min_confirmations` policy are suppressed,
 not merely labeled. With the default Ynet-only configuration, this means the
