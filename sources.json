@@ -47,6 +47,22 @@
       "min_confirmations": 2,
       "allow_live": false,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security"]
+    },
+    {
+      "id": "haaretz_news",
+      "kind": "rss",
+      "name": "הארץ",
+      "independence_group": "haaretz",
+      "enabled": true,
+      "language": "he",
+      "url": "https://www.haaretz.co.il/srv/rss---feedly",
+      "max_age_seconds": 300,
+      "poll_interval_seconds": 30,
+      "relevance": 0.8,
+      "trust_tier": 2,
+      "min_confirmations": 2,
+      "allow_live": false,
+      "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security"]
     }
   ]
 }

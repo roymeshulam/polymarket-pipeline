@@ -20,8 +20,8 @@ Fair-probability comparison → dry-run signal or guarded CLOB V2 order
 
 ## Important behavior
 
-- Ynet, Israel Hayom, and Walla RSS feeds are enabled as independent discovery
-  sources.
+- Ynet, Israel Hayom, Walla, and Haaretz RSS feeds are enabled as independent
+  discovery sources.
 - Both publishers require independent confirmation and are not authorized for
   live trading or aviation-market routing by default.
 - Optional X, Telegram, and specialist-source templates remain available in
