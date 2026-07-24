@@ -20,7 +20,7 @@ Fair-probability comparison → dry-run signal or guarded CLOB V2 order
 
 ## Important behavior
 
-- Ynet breaking-news RSS and Maariv Israel-news RSS are enabled as independent
+- Ynet breaking-news RSS and Israel Hayom RSS are enabled as independent
   discovery sources.
 - Both publishers require independent confirmation and are not authorized for
   live trading or aviation-market routing by default.

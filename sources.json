@@ -17,20 +17,20 @@
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security"]
     },
     {
-      "id": "maariv_israel_news",
+      "id": "israel_hayom_news",
       "kind": "rss",
-      "name": "מעריב חדשות בארץ",
-      "independence_group": "maariv",
+      "name": "ישראל היום",
+      "independence_group": "israel_hayom",
       "enabled": true,
       "language": "he",
-      "url": "https://www.maariv.co.il/rss/rssfeedschadashotbaarez",
+      "url": "https://www.israelhayom.co.il/rss/rss.xml",
       "max_age_seconds": 300,
       "poll_interval_seconds": 30,
       "relevance": 0.8,
       "trust_tier": 2,
       "min_confirmations": 2,
       "allow_live": false,
-      "topics": ["israel", "politics", "security"]
+      "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security"]
     },
     {
       "id": "official_aviation_rss",
