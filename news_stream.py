@@ -100,17 +100,33 @@ class TwitterStream:
     ):
         self.bearer_token = bearer_token
         # Preserve the small rate-limit unit tests that construct keyword lists.
-        if profiles and isinstance(profiles[0], str):
-            profiles = [
+        resolved_profiles: list[SourceProfile]
+        if profiles and all(isinstance(profile, str) for profile in profiles):
+            keywords = [
+                profile for profile in profiles if isinstance(profile, str)
+            ]
+            resolved_profiles = [
                 SourceProfile(
                     source_id="legacy_test",
                     kind="twitter",
                     name="Legacy test rule",
                     enabled=True,
-                    query=" OR ".join(f'"{value}"' for value in profiles),
+                    query=" OR ".join(f'"{value}"' for value in keywords),
                 )
             ]
-        self.profiles: list[SourceProfile] = list(profiles)
+        elif all(isinstance(profile, SourceProfile) for profile in profiles):
+            resolved_profiles = [
+                profile
+                for profile in profiles
+                if isinstance(profile, SourceProfile)
+            ]
+        else:
+            raise TypeError(
+                "TwitterStream profiles must contain only SourceProfile "
+                "instances or only strings"
+            )
+
+        self.profiles = resolved_profiles
         self._profiles = profile_map(self.profiles)
         self.base_url = "https://api.x.com/2"
         self.rule_tag_prefix = "israel_pipeline:"
