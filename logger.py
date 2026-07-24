@@ -148,6 +148,10 @@ def log_trade(
          news_latency_ms, classification_latency_ms, total_latency_ms),
     )
     trade_id = cur.lastrowid
+    if trade_id is None:
+        conn.rollback()
+        conn.close()
+        raise RuntimeError("SQLite did not return an ID for the inserted trade")
     conn.commit()
     conn.close()
     return trade_id
@@ -169,6 +173,10 @@ def log_news_event(
         (headline, source, received_at, latency_ms, matched_markets, triggered_trades),
     )
     event_id = cur.lastrowid
+    if event_id is None:
+        conn.rollback()
+        conn.close()
+        raise RuntimeError("SQLite did not return an ID for the inserted news event")
     conn.commit()
     conn.close()
     return event_id
@@ -205,6 +213,10 @@ def log_run_start() -> int:
         "INSERT INTO pipeline_runs (started_at) VALUES (?)", (now,)
     )
     run_id = cur.lastrowid
+    if run_id is None:
+        conn.rollback()
+        conn.close()
+        raise RuntimeError("SQLite did not return an ID for the inserted pipeline run")
     conn.commit()
     conn.close()
     return run_id
@@ -262,8 +274,14 @@ def reserve_exposure(amount_usd: float, daily_limit: float, open_limit: float) -
             "INSERT INTO exposure_reservations (amount_usd, status) VALUES (?, 'reserved')",
             (amount_usd,),
         )
+        reservation_id = cur.lastrowid
+        if reservation_id is None:
+            conn.rollback()
+            raise RuntimeError(
+                "SQLite did not return an ID for the exposure reservation"
+            )
         conn.commit()
-        return int(cur.lastrowid)
+        return reservation_id
     finally:
         conn.close()
 
