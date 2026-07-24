@@ -20,9 +20,10 @@ Fair-probability comparison → dry-run signal or guarded CLOB V2 order
 
 ## Important behavior
 
-- Ynet breaking-news RSS is enabled as a discovery source.
-- Ynet requires an independent confirmation and is not authorized for live
-  trading by default.
+- Ynet breaking-news RSS and Maariv Israel-news RSS are enabled as independent
+  discovery sources.
+- Both publishers require independent confirmation and are not authorized for
+  live trading or aviation-market routing by default.
 - X and Telegram entries are disabled placeholders until you add reviewed
   accounts or channels.
 - Every source has its own maximum actionable age and relevance score.

@@ -7,7 +7,7 @@
       "independence_group": "ynet",
       "enabled": true,
       "language": "he",
-      "url": "https://www.ynet.co.il/Integration/StoryRss1854.xml",
+      "url": "https://www.ynet.co.il/Integration/StoryRss2.xml",
       "max_age_seconds": 300,
       "poll_interval_seconds": 30,
       "relevance": 0.8,
@@ -15,6 +15,22 @@
       "min_confirmations": 2,
       "allow_live": false,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security"]
+    },
+    {
+      "id": "maariv_israel_news",
+      "kind": "rss",
+      "name": "מעריב חדשות בארץ",
+      "independence_group": "maariv",
+      "enabled": true,
+      "language": "he",
+      "url": "https://www.maariv.co.il/rss/rssfeedschadashotbaarez",
+      "max_age_seconds": 300,
+      "poll_interval_seconds": 30,
+      "relevance": 0.8,
+      "trust_tier": 2,
+      "min_confirmations": 2,
+      "allow_live": false,
+      "topics": ["israel", "politics", "security"]
     },
     {
       "id": "official_aviation_rss",
