@@ -63,6 +63,22 @@ POLYMARKET_API_KEY=...               # Optional — live trading only
 python cli.py verify
 ```
 
+### Automated deployment
+
+Pushes to `main` run `.github/workflows/deploy.yml`, which connects to the
+production server, pulls the repository configured as the `WorkingDirectory`
+of `polymarket-watch.service`, and restarts the user service installed at
+`/home/meshulro/.config/systemd/user/polymarket-watch.service`.
+
+Configure these secrets in the GitHub `production` environment:
+
+- `DEPLOY_HOST`
+- `DEPLOY_USERNAME`
+- `DEPLOY_PASSWORD`
+- `DEPLOY_KNOWN_HOSTS`
+
+The workflow can also be started manually with **Run workflow**.
+
 ---
 
 ## How to Use

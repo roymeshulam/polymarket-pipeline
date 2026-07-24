@@ -1,0 +1,101 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: polymarket-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Update repository and restart service
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+
+    steps:
+      - name: Validate deployment secrets
+        env:
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USERNAME: ${{ secrets.DEPLOY_USERNAME }}
+        run: |
+          test -n "$DEPLOY_PASSWORD" || {
+            echo "DEPLOY_PASSWORD is not configured" >&2
+            exit 1
+          }
+          test -n "$DEPLOY_KNOWN_HOSTS" || {
+            echo "DEPLOY_KNOWN_HOSTS is not configured" >&2
+            exit 1
+          }
+          test -n "$DEPLOY_HOST" || {
+            echo "DEPLOY_HOST is not configured" >&2
+            exit 1
+          }
+          test -n "$DEPLOY_USERNAME" || {
+            echo "DEPLOY_USERNAME is not configured" >&2
+            exit 1
+          }
+
+      - name: Ensure SSH password helper is available
+        run: |
+          if ! command -v sshpass >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes sshpass
+          fi
+
+      - name: Configure trusted host key
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Deploy Polymarket pipeline
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USERNAME: ${{ secrets.DEPLOY_USERNAME }}
+        run: |
+          sshpass -e ssh \
+            -p 22 \
+            -o ConnectTimeout=15 \
+            -o PasswordAuthentication=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=6 \
+            -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USERNAME}@${DEPLOY_HOST}" \
+            'bash -se' <<'REMOTE'
+          set -o pipefail
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+          service="polymarket-watch.service"
+          working_dir="$(systemctl --user show "$service" --property=WorkingDirectory --value)"
+
+          if [ -z "$working_dir" ] || [ "$working_dir" = "n/a" ]; then
+            echo "$service has no usable WorkingDirectory" >&2
+            systemctl --user status "$service" --no-pager --full || true
+            exit 1
+          fi
+
+          git -C "$working_dir" pull --ff-only origin main
+          echo "Deployed commit: $(git -C "$working_dir" rev-parse HEAD)"
+
+          if ! timeout 60s systemctl --user restart "$service"; then
+            echo "Failed to restart $service" >&2
+            systemctl --user status "$service" --no-pager --full || true
+            journalctl --user -u "$service" -n 100 --no-pager || true
+            exit 1
+          fi
+
+          systemctl --user status "$service" --no-pager --full
+          REMOTE
