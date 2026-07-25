@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+from datetime import datetime, timezone
+
+import httpx
 
 import config
 import logger
@@ -12,6 +15,8 @@ from markets import get_token_id
 ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 PRIVATE_KEY_RE = re.compile(r"^(0x)?[a-fA-F0-9]{64}$")
 _CLOB_CLIENT = None
+POSITIONS_API = "https://data-api.polymarket.com/positions"
+MARKET_CLAIM_STALE_SECONDS = 300
 
 
 def validate_live_configuration() -> list[str]:
@@ -89,14 +94,37 @@ def execute_trade(signal: Signal) -> dict:
     if not 0 < signal.bet_amount <= config.MAX_BET_USD:
         return _log_and_return(signal, "rejected_bet_size", None)
 
+    try:
+        client = _build_client()
+        market_claim_id, rejection = _claim_market_for_live_trade(
+            client, signal.market.condition_id
+        )
+    except ImportError:
+        return _log_and_return(signal, "error_no_clob_client", None)
+    except Exception as exc:
+        return _log_and_return(
+            signal, f"error_market_state_{type(exc).__name__}", None
+        )
+    if market_claim_id is None:
+        return _log_and_return(
+            signal, rejection or "rejected_market_already_open", None
+        )
+
     reservation_id = logger.reserve_exposure(
         signal.bet_amount,
         config.DAILY_LOSS_LIMIT_USD,
         config.MAX_OPEN_EXPOSURE_USD,
     )
     if reservation_id is None:
+        logger.release_market_trade(signal.market.condition_id, market_claim_id)
         return _log_and_return(signal, "rejected_exposure_limit", None)
-    return _execute_live(signal, reservation_id)
+    if not logger.attach_market_exposure(
+        signal.market.condition_id, market_claim_id, reservation_id
+    ):
+        logger.update_reservation(reservation_id, "released")
+        logger.release_market_trade(signal.market.condition_id, market_claim_id)
+        return _log_and_return(signal, "error_market_claim_lost", None)
+    return _execute_live(signal, reservation_id, market_claim_id)
 
 
 async def execute_trade_async(signal: Signal) -> dict:
@@ -130,8 +158,98 @@ def _build_client():
     return _CLOB_CLIENT
 
 
-def _execute_live(signal: Signal, reservation_id: int) -> dict:
+def _get_open_positions(market_id: str) -> list[dict]:
+    """Return non-zero positions for this wallet and condition from the Data API."""
+    response = httpx.get(
+        POSITIONS_API,
+        params={
+            "user": config.POLYMARKET_FUNDER_ADDRESS,
+            "market": market_id,
+            "sizeThreshold": 0,
+            "limit": 500,
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise ValueError("positions API returned a non-list response")
+    positions = []
+    for position in payload:
+        if not isinstance(position, dict):
+            continue
+        if str(position.get("conditionId", "")).lower() != market_id.lower():
+            continue
+        try:
+            size = float(position.get("size", 0))
+        except (TypeError, ValueError):
+            raise ValueError("positions API returned an invalid position size")
+        if size > 0:
+            positions.append(position)
+    return positions
+
+
+def _remote_market_is_open(client, market_id: str) -> bool:
+    """Return whether the wallet has an open order or position in this market."""
+    from py_clob_client_v2 import OpenOrderParams
+
+    if client.get_open_orders(params=OpenOrderParams(market=market_id)):
+        return True
+    return bool(_get_open_positions(market_id))
+
+
+def _claim_age_seconds(lock: dict) -> float:
+    updated_at = str(lock.get("updated_at") or lock.get("created_at") or "")
+    if not updated_at:
+        return float("inf")
+    timestamp = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - timestamp).total_seconds())
+
+
+def _claim_market_for_live_trade(client, market_id: str) -> tuple[str | None, str | None]:
+    """Claim one market atomically and reconcile old locks with Polymarket."""
+    lock = logger.get_market_trade_lock(market_id)
+    if lock is None:
+        claim_id = logger.reserve_market_trade(market_id)
+        if claim_id is None:
+            return None, "rejected_market_already_open"
+    else:
+        # A fresh reservation may not have reached Polymarket yet, and a newly
+        # posted order may not be visible in the positions API immediately.
+        # Never steal either lock during the reconciliation grace period.
+        if _claim_age_seconds(lock) < MARKET_CLAIM_STALE_SECONDS:
+            return None, "rejected_market_already_open"
+        if _remote_market_is_open(client, market_id):
+            if lock["status"] == "reserved":
+                logger.mark_market_trade_open(
+                    market_id,
+                    lock["claim_id"],
+                    lock.get("order_id"),
+                    lock.get("token_id"),
+                )
+            return None, "rejected_market_already_open"
+        claim_id = logger.reclaim_market_trade(market_id, lock["claim_id"])
+        if claim_id is None:
+            return None, "rejected_market_already_open"
+
+    # The local claim closes the race between workers. This remote check catches
+    # orders or positions created outside this process before a new order posts.
+    try:
+        if _remote_market_is_open(client, market_id):
+            logger.mark_market_trade_open(market_id, claim_id, None, None)
+            return None, "rejected_market_already_open"
+    except Exception:
+        logger.release_market_trade(market_id, claim_id)
+        raise
+    return claim_id, None
+
+
+def _execute_live(signal: Signal, reservation_id: int, market_claim_id: str) -> dict:
     """Place a bounded GTC order using a fresh executable price."""
+    post_attempted = False
+    token_id = None
     try:
         from py_clob_client_v2 import (
             OrderArgs,
@@ -156,6 +274,7 @@ def _execute_live(signal: Signal, reservation_id: int) -> dict:
         max_price = reference_price * (1 + config.MAX_SLIPPAGE_BPS / 10_000)
         if live_price > max_price:
             logger.update_reservation(reservation_id, "released")
+            logger.release_market_trade(signal.market.condition_id, market_claim_id)
             return _log_and_return(signal, "rejected_slippage", None)
 
         tick_size = float(signal.market.tick_size or "0.01")
@@ -167,6 +286,7 @@ def _execute_live(signal: Signal, reservation_id: int) -> dict:
         if shares <= 0 or shares * limit_price > signal.bet_amount + 0.01:
             raise ValueError("invalid order notional")
 
+        post_attempted = True
         response = client.create_and_post_order(
             order_args=OrderArgs(
                 price=limit_price,
@@ -183,14 +303,27 @@ def _execute_live(signal: Signal, reservation_id: int) -> dict:
         order_id = response.get("orderID") or response.get("id")
         if not order_id:
             raise RuntimeError("CLOB did not return an order id")
+        if not logger.mark_market_trade_open(
+            signal.market.condition_id,
+            market_claim_id,
+            str(order_id),
+            token_id,
+        ):
+            raise RuntimeError("lost per-market trade claim after posting order")
         logger.update_reservation(reservation_id, "posted", str(order_id))
         return _log_and_return(signal, "posted", str(order_id))
     except ImportError:
         logger.update_reservation(reservation_id, "released")
+        logger.release_market_trade(signal.market.condition_id, market_claim_id)
         return _log_and_return(signal, "error_no_clob_client", None)
     except Exception as exc:
-        logger.update_reservation(reservation_id, "released")
-        return _log_and_return(signal, f"error_{type(exc).__name__}", None)
+        if not post_attempted:
+            logger.update_reservation(reservation_id, "released")
+            logger.release_market_trade(signal.market.condition_id, market_claim_id)
+        suffix = "_order_state_unknown" if post_attempted else ""
+        return _log_and_return(
+            signal, f"error_{type(exc).__name__}{suffix}", None
+        )
 
 
 def _log_and_return(signal: Signal, status: str, order_id: str | None) -> dict:

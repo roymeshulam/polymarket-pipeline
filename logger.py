@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,6 +11,7 @@ DB_PATH = Path(__file__).parent / "trades.db"
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
@@ -91,9 +93,21 @@ def init_db():
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS market_trade_locks (
+            market_id TEXT PRIMARY KEY,
+            claim_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL CHECK(status IN ('reserved', 'open')),
+            order_id TEXT,
+            token_id TEXT,
+            exposure_reservation_id INTEGER REFERENCES exposure_reservations(id),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
     """)
-    # Add V2 columns to existing trades table if missing
+    # Add columns to databases created by earlier versions.
     _migrate_v2_columns(conn)
+    _migrate_market_trade_lock_columns(conn)
     conn.close()
 
 
@@ -112,6 +126,19 @@ def _migrate_v2_columns(conn):
     for col_name, col_type in new_cols:
         if col_name not in columns:
             conn.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+    conn.commit()
+
+
+def _migrate_market_trade_lock_columns(conn):
+    """Add lock metadata introduced after the initial table release."""
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(market_trade_locks)").fetchall()
+    }
+    if "exposure_reservation_id" not in columns:
+        conn.execute(
+            "ALTER TABLE market_trade_locks ADD COLUMN exposure_reservation_id INTEGER"
+        )
     conn.commit()
 
 
@@ -309,6 +336,123 @@ def get_open_exposure() -> float:
     ).fetchone()
     conn.close()
     return float(row["total"])
+
+
+def reserve_market_trade(market_id: str) -> str | None:
+    """Atomically claim a market so only one live order path can proceed."""
+    if not market_id:
+        return None
+    claim_id = uuid.uuid4().hex
+    conn = _conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO market_trade_locks
+               (market_id, claim_id, status) VALUES (?, ?, 'reserved')""",
+            (market_id, claim_id),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return None
+        conn.commit()
+        return claim_id
+    finally:
+        conn.close()
+
+
+def get_market_trade_lock(market_id: str) -> dict | None:
+    conn = _conn()
+    row = conn.execute(
+        "SELECT * FROM market_trade_locks WHERE market_id=?", (market_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def attach_market_exposure(
+    market_id: str, claim_id: str, reservation_id: int
+) -> bool:
+    """Tie the market claim to its USD reservation before posting an order."""
+    conn = _conn()
+    cur = conn.execute(
+        """UPDATE market_trade_locks
+           SET exposure_reservation_id=?, updated_at=datetime('now')
+           WHERE market_id=? AND claim_id=? AND status='reserved'""",
+        (reservation_id, market_id, claim_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount == 1
+
+
+def mark_market_trade_open(
+    market_id: str,
+    claim_id: str,
+    order_id: str | None,
+    token_id: str | None,
+) -> bool:
+    """Convert this process's market claim into a persistent open-trade lock."""
+    conn = _conn()
+    cur = conn.execute(
+        """UPDATE market_trade_locks
+           SET status='open', order_id=?, token_id=?, updated_at=datetime('now')
+           WHERE market_id=? AND claim_id=?""",
+        (order_id, token_id, market_id, claim_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount == 1
+
+
+def release_market_trade(market_id: str, claim_id: str) -> bool:
+    """Release only an unposted claim owned by the caller."""
+    conn = _conn()
+    cur = conn.execute(
+        """DELETE FROM market_trade_locks
+           WHERE market_id=? AND claim_id=? AND status='reserved'""",
+        (market_id, claim_id),
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount == 1
+
+
+def reclaim_market_trade(market_id: str, previous_claim_id: str) -> str | None:
+    """Atomically replace a reconciled stale/open lock with a new reservation."""
+    new_claim_id = uuid.uuid4().hex
+    conn = _conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        previous = conn.execute(
+            """SELECT exposure_reservation_id FROM market_trade_locks
+               WHERE market_id=? AND claim_id=?""",
+            (market_id, previous_claim_id),
+        ).fetchone()
+        if previous is None:
+            conn.rollback()
+            return None
+        if previous["exposure_reservation_id"] is not None:
+            conn.execute(
+                """UPDATE exposure_reservations
+                   SET status='released', updated_at=datetime('now')
+                   WHERE id=? AND status IN ('reserved', 'posted')""",
+                (previous["exposure_reservation_id"],),
+            )
+        cur = conn.execute(
+            """UPDATE market_trade_locks
+               SET claim_id=?, status='reserved', order_id=NULL, token_id=NULL,
+                   exposure_reservation_id=NULL,
+                   created_at=datetime('now'), updated_at=datetime('now')
+               WHERE market_id=? AND claim_id=?""",
+            (new_claim_id, market_id, previous_claim_id),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return None
+        conn.commit()
+        return new_claim_id
+    finally:
+        conn.close()
 
 
 def get_recent_trades(limit: int = 20) -> list[dict]:
