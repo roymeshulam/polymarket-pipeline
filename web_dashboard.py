@@ -28,6 +28,7 @@ INDEX_HTML = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Polymarket Pipeline</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='6'%20fill='%230a0e0a'%20stroke='%234ade80'%20stroke-width='2'/%3E%3Ctext%20x='16'%20y='23'%20font-family='Consolas,monospace'%20font-size='17'%20font-weight='bold'%20fill='%234ade80'%20text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E">
 <style>
   :root {
     color-scheme: dark;
