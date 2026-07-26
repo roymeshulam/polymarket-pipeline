@@ -37,6 +37,7 @@ INDEX_HTML = """<!doctype html>
     --muted: #6b7280; --text: #d1fae5;
   }
   * { box-sizing: border-box; }
+  html, body { max-width: 100%; overflow-x: hidden; }
   body {
     background: var(--bg); color: var(--text);
     font-family: "Cascadia Code", "Consolas", ui-monospace, monospace;
@@ -49,11 +50,11 @@ INDEX_HTML = """<!doctype html>
   header h1 { font-size: 15px; color: var(--accent); margin: 0; letter-spacing: 1px; flex-shrink: 0; }
   header .sub { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   header .sub:last-child { flex-shrink: 0; }
-  .grid { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; }
-  .col { display: flex; flex-direction: column; gap: 10px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px; min-width: 0; }
+  .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
   .panel {
     border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
-    background: var(--panel);
+    background: var(--panel); min-width: 0; max-width: 100%; overflow: hidden;
   }
   .panel h2 {
     font-size: 12px; color: var(--accent); margin: 0 0 8px 0;
@@ -61,7 +62,7 @@ INDEX_HTML = """<!doctype html>
   }
   .row { display: flex; justify-content: space-between; padding: 2px 0; }
   .row .label { color: var(--muted); }
-  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 3px 6px; white-space: nowrap; }
   th { color: var(--muted); font-weight: normal; border-bottom: 1px solid var(--border); }
@@ -73,6 +74,8 @@ INDEX_HTML = """<!doctype html>
   .loss { color: var(--loss); }
   .side-yes { color: var(--accent); }
   .side-no { color: #e879f9; }
+  .mkt-link { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .mkt-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
   footer {
     border: 2px solid var(--accent); padding: 6px 14px; margin-top: 10px;
     display: flex; justify-content: space-between; gap: 10px; color: var(--muted);
@@ -86,6 +89,33 @@ INDEX_HTML = """<!doctype html>
     body { font-size: 12px; padding: 8px; }
     header { padding: 6px 10px; }
     header .sub:first-of-type { display: none; }
+    .panel { padding: 9px 10px; }
+    .row { gap: 12px; }
+    .row > :last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+    .table-scroll { overflow: visible; }
+    #scanner table, #scanner tbody, #trades table, #trades tbody { display: block; width: 100%; }
+    #scanner tr:first-child, #trades tr:first-child { display: none; }
+    #scanner tr:not(:first-child), #trades tr:not(:first-child) {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 3px 14px; width: 100%; padding: 7px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    #scanner tr:last-child, #trades tr:last-child { border-bottom: 0; }
+    #scanner td, #trades td {
+      display: flex; justify-content: space-between; gap: 8px;
+      min-width: 0; padding: 2px 0; white-space: normal; text-align: right;
+    }
+    #scanner td::before, #trades td::before {
+      content: attr(data-label); color: var(--muted); text-align: left;
+    }
+    #scanner td:first-child, #trades td:nth-child(2) {
+      grid-column: 1 / -1; padding-bottom: 5px; margin-bottom: 2px;
+      border-bottom: 1px dotted var(--border); overflow-wrap: anywhere;
+    }
+    #scanner td.empty, #trades td.empty {
+      grid-column: 1 / -1; display: block; text-align: left; border: 0;
+    }
+    #scanner td.empty::before, #trades td.empty::before { content: none; }
   }
 </style>
 </head>
@@ -121,6 +151,11 @@ function statusLabel(status) {
   if (status === "dry_run") return "DRY RUN";
   if (status === "executed" || status === "filled") return "FILLED";
   return (status || "").slice(0, 9).toUpperCase() || "—";
+}
+function marketCell(question, url) {
+  if (!url) return question;
+  const safeUrl = url.replace(/"/g, "%22");
+  return `<a class="mkt-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${question}</a>`;
 }
 function render(data) {
   document.getElementById("clock").textContent = data.now;
@@ -158,17 +193,17 @@ function render(data) {
 
   let scannerRows = "";
   if (!data.scanner_rows.length) {
-    scannerRows = `<tr><td class="dim">Waiting for first scan...</td></tr>`;
+    scannerRows = `<tr><td class="dim empty" colspan="7">Waiting for first scan...</td></tr>`;
   } else {
     scannerRows = data.scanner_rows.map(r => `
       <tr class="${r.is_signal ? '' : 'dim'}">
-        <td>${r.question}</td>
-        <td class="num">${r.mkt_price.toFixed(2)}</td>
-        <td class="num win">${r.model_confidence.toFixed(2)}</td>
-        <td class="num ${r.is_signal ? 'win' : ''}">${(r.edge * 100).toFixed(0)}%</td>
-        <td class="center ${r.side === 'YES' ? 'side-yes' : 'side-no'}">${r.side ?? "—"}</td>
-        <td class="num">${r.bet !== null ? "$" + r.bet.toFixed(0) : "—"}</td>
-        <td class="center ${statusClass(r.status)}">${r.is_signal ? statusLabel(r.status) : "no edge"}</td>
+        <td data-label="Market">${marketCell(r.question, r.url)}</td>
+        <td data-label="Mkt$" class="num">${r.mkt_price.toFixed(2)}</td>
+        <td data-label="Model" class="num win">${r.model_confidence.toFixed(2)}</td>
+        <td data-label="Edge" class="num ${r.is_signal ? 'win' : ''}">${(r.edge * 100).toFixed(0)}%</td>
+        <td data-label="Side" class="center ${r.side === 'YES' ? 'side-yes' : 'side-no'}">${r.side ?? "—"}</td>
+        <td data-label="Bet" class="num">${r.bet !== null ? "$" + r.bet.toFixed(0) : "—"}</td>
+        <td data-label="Status" class="center ${statusClass(r.status)}">${r.is_signal ? statusLabel(r.status) : "no edge"}</td>
       </tr>`).join("");
   }
   document.getElementById("scanner").innerHTML = `
@@ -181,18 +216,18 @@ function render(data) {
 
   let tradeRows = "";
   if (!data.trade_rows.length) {
-    tradeRows = `<tr><td class="dim">No trades yet — pipeline scanning...</td></tr>`;
+    tradeRows = `<tr><td class="dim empty" colspan="8">No trades yet — pipeline scanning...</td></tr>`;
   } else {
     tradeRows = data.trade_rows.map(t => `
       <tr>
-        <td class="dim">${t.time}</td>
-        <td>${t.question}</td>
-        <td class="center ${t.side === 'YES' ? 'side-yes' : 'side-no'}">${t.side}</td>
-        <td class="num">$${t.bet.toFixed(2)}</td>
-        <td class="num">${(t.edge * 100).toFixed(0)}%</td>
-        <td class="num">${t.model.toFixed(2)}</td>
-        <td class="num">${t.mkt_price.toFixed(2)}</td>
-        <td class="center ${statusClass(t.status)}">${statusLabel(t.status)}</td>
+        <td data-label="Time" class="dim">${t.time}</td>
+        <td data-label="Market">${t.question}</td>
+        <td data-label="Side" class="center ${t.side === 'YES' ? 'side-yes' : 'side-no'}">${t.side}</td>
+        <td data-label="Bet" class="num">$${t.bet.toFixed(2)}</td>
+        <td data-label="Edge" class="num">${(t.edge * 100).toFixed(0)}%</td>
+        <td data-label="Model" class="num">${t.model.toFixed(2)}</td>
+        <td data-label="Mkt$" class="num">${t.mkt_price.toFixed(2)}</td>
+        <td data-label="Status" class="center ${statusClass(t.status)}">${statusLabel(t.status)}</td>
       </tr>`).join("");
   }
   document.getElementById("trades").innerHTML = `
@@ -285,6 +320,7 @@ def _build_polling_payload() -> dict:
         m, s, t = sig["market"], sig["score"], sig["trade"]
         scanner_rows.append({
             "question": m.question[:60],
+            "url": m.url or None,
             "mkt_price": m.yes_price,
             "model_confidence": s["confidence"],
             "edge": s["edge"],
@@ -300,6 +336,7 @@ def _build_polling_payload() -> dict:
         confidence = score.get("confidence", 0.5)
         scanner_rows.append({
             "question": m.question[:60],
+            "url": m.url or None,
             "mkt_price": m.yes_price,
             "model_confidence": confidence,
             "edge": abs(confidence - m.yes_price),
@@ -349,6 +386,7 @@ def _build_attached_payload(pipeline) -> dict:
         side = score["side"] if score else None
         scanner_rows.append({
             "question": m.question[:60],
+            "url": m.url or None,
             "mkt_price": m.yes_price,
             "model_confidence": confidence,
             "edge": edge,
