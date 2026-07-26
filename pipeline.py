@@ -52,6 +52,9 @@ class PipelineV2:
             "signals_found": 0,
             "trades_executed": 0,
         }
+        # Most recent classification per market, keyed by condition_id — read by
+        # web_dashboard.py to render a live scanner view; not used by the pipeline itself.
+        self.latest_scores: dict = {}
 
     async def run(self):
         """Start all pipeline components concurrently."""
@@ -109,6 +112,11 @@ class PipelineV2:
                     classification = await classify_event_async(event, market)
 
                     signal = detect_edge_v2(market, classification, event)
+                    self.latest_scores[market.condition_id] = {
+                        "confidence": classification.estimated_yes_probability,
+                        "edge": signal.edge if signal else 0.0,
+                        "side": signal.side if signal else None,
+                    }
                     if signal:
                         self.stats["signals_found"] += 1
                         await self.signal_queue.put(signal)
@@ -166,6 +174,13 @@ class PipelineV2:
 def run_pipeline_v2():
     """Entry point for V2 event-driven pipeline."""
     pipeline = PipelineV2()
+
+    try:
+        from web_dashboard import start_attached_dashboard
+        start_attached_dashboard(pipeline)
+    except OSError as e:
+        console.print(f"[yellow]Web dashboard failed to start: {e}[/yellow]")
+
     try:
         asyncio.run(pipeline.run())
     except KeyboardInterrupt:

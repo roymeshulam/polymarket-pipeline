@@ -4,10 +4,12 @@ Polymarket Pipeline — CLI Interface
 
 Usage:
     python cli.py watch                # V2: Event-driven pipeline (real-time news → classify → trade)
+                                        #     also serves a read-only web dashboard on localhost:$DASHBOARD_PORT
     python cli.py watch --live         # V2: With live trading
     python cli.py run                  # One synchronous event-aware scan
     python cli.py run --live           # Synchronous scan with live trading
     python cli.py dashboard            # Launch live terminal dashboard
+    python cli.py dashboard --web       # Launch standalone browser-based dashboard on localhost:$DASHBOARD_PORT
     python cli.py backtest             # Backtest V2 strategy against resolved markets
     python cli.py calibrate            # Show classification accuracy report
     python cli.py niche                # Browse niche markets (< $500K volume)
@@ -183,8 +185,12 @@ def cmd_niche(args):
 
 
 def cmd_dashboard(args):
-    from dashboard import run_dashboard
-    run_dashboard(scan_interval=args.speed)
+    if args.web:
+        from web_dashboard import run_web_dashboard
+        run_web_dashboard(scan_interval=args.speed)
+    else:
+        from dashboard import run_dashboard
+        run_dashboard(scan_interval=args.speed)
 
 
 def cmd_verify(args):
@@ -489,6 +495,7 @@ def main():
     # dashboard
     p_dash = sub.add_parser("dashboard", help="Launch live terminal dashboard")
     p_dash.add_argument("--speed", type=float, default=60.0, help="Seconds between scan cycles")
+    p_dash.add_argument("--web", action="store_true", help="Serve a browser-based view on localhost:$DASHBOARD_PORT instead of the terminal UI")
     p_dash.set_defaults(func=cmd_dashboard)
 
     # backtest
