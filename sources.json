@@ -462,7 +462,7 @@
       "poll_interval_seconds": 45,
       "relevance": 0.85,
       "trust_tier": 2,
-      "min_confirmations": 2,
+      "min_confirmations": 1,
       "allow_live": false,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
@@ -478,7 +478,7 @@
       "poll_interval_seconds": 45,
       "relevance": 0.9,
       "trust_tier": 2,
-      "min_confirmations": 2,
+      "min_confirmations": 1,
       "allow_live": false,
       "topics": ["israel", "security", "military", "gaza", "lebanon", "iran"]
     },
@@ -494,7 +494,7 @@
       "poll_interval_seconds": 45,
       "relevance": 0.8,
       "trust_tier": 2,
-      "min_confirmations": 2,
+      "min_confirmations": 1,
       "allow_live": false,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
@@ -510,7 +510,7 @@
       "poll_interval_seconds": 60,
       "relevance": 0.85,
       "trust_tier": 2,
-      "min_confirmations": 2,
+      "min_confirmations": 1,
       "allow_live": false,
       "topics": ["israel", "politics", "security", "news"]
     }

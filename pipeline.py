@@ -84,14 +84,6 @@ class PipelineV2:
             event: NewsEvent = await self.news_queue.get()
             self.stats["news_processed"] += 1
 
-            # Log the news event
-            logger.log_news_event(
-                headline=event.headline,
-                source=event.source_id or event.source,
-                received_at=event.received_at.isoformat(),
-                latency_ms=event.latency_ms,
-            )
-
             # Match to niche markets
             matched = match_news_to_markets(
                 event.headline,
@@ -99,6 +91,15 @@ class PipelineV2:
                 summary=event.summary,
                 source_relevance=event.relevance,
                 source_topics=event.topics,
+            )
+
+            # Log the news event with its match count
+            logger.log_news_event(
+                headline=event.headline,
+                source=event.source_id or event.source,
+                received_at=event.received_at.isoformat(),
+                latency_ms=event.latency_ms,
+                matched_markets=len(matched),
             )
 
             if not matched:
