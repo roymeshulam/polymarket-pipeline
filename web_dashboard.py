@@ -42,11 +42,12 @@ INDEX_HTML = """<!doctype html>
     font-size: 13px; margin: 0; padding: 12px;
   }
   header {
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
     border: 2px solid var(--accent); padding: 8px 14px; margin-bottom: 10px;
   }
-  header h1 { font-size: 15px; color: var(--accent); margin: 0; letter-spacing: 1px; }
-  header .sub { color: var(--muted); }
+  header h1 { font-size: 15px; color: var(--accent); margin: 0; letter-spacing: 1px; flex-shrink: 0; }
+  header .sub { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .sub:last-child { flex-shrink: 0; }
   .grid { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; }
   .col { display: flex; flex-direction: column; gap: 10px; }
   .panel {
@@ -59,6 +60,7 @@ INDEX_HTML = """<!doctype html>
   }
   .row { display: flex; justify-content: space-between; padding: 2px 0; }
   .row .label { color: var(--muted); }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 3px 6px; white-space: nowrap; }
   th { color: var(--muted); font-weight: normal; border-bottom: 1px solid var(--border); }
@@ -72,9 +74,18 @@ INDEX_HTML = """<!doctype html>
   .side-no { color: #e879f9; }
   footer {
     border: 2px solid var(--accent); padding: 6px 14px; margin-top: 10px;
-    display: flex; justify-content: space-between; color: var(--muted);
+    display: flex; justify-content: space-between; gap: 10px; color: var(--muted);
   }
+  footer #headline {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  footer #mode { flex-shrink: 0; }
   @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  @media (max-width: 640px) {
+    body { font-size: 12px; padding: 8px; }
+    header { padding: 6px 10px; }
+    header .sub:first-of-type { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -122,6 +133,7 @@ function render(data) {
     <div class="row"><span class="label">Activity</span><span class="dim">${s.activity}</span></div>
     <div class="row"><span class="label">Markets Scanned</span><span>${s.markets_scanned ?? "—"}</span></div>
     <div class="row"><span class="label">Headlines Found</span><span>${s.headlines_found ?? "—"}</span></div>
+    <div class="row"><span class="label">Tweets Today</span><span>${s.tweets_today ?? "—"}${s.tweets_cap ? ` / ${s.tweets_cap}` : ""}</span></div>
     <div class="row"><span class="label">Signals / Trades</span><span>${s.signals ?? "—"} / ${s.trades ?? "—"}</span></div>
     <div class="row">&nbsp;</div>
     <div class="row"><span class="label">Edge Threshold</span><span>&gt;= ${(s.edge_threshold * 100).toFixed(0)}%</span></div>
@@ -159,10 +171,12 @@ function render(data) {
       </tr>`).join("");
   }
   document.getElementById("scanner").innerHTML = `
+    <div class="table-scroll">
     <table>
       <tr><th>Market</th><th class="num">Mkt$</th><th class="num">Model</th><th class="num">Edge</th><th class="center">Side</th><th class="num">Bet</th><th class="center">Status</th></tr>
       ${scannerRows}
-    </table>`;
+    </table>
+    </div>`;
 
   let tradeRows = "";
   if (!data.trade_rows.length) {
@@ -181,10 +195,12 @@ function render(data) {
       </tr>`).join("");
   }
   document.getElementById("trades").innerHTML = `
+    <div class="table-scroll">
     <table>
       <tr><th>Time</th><th>Market</th><th class="center">Side</th><th class="num">Bet</th><th class="num">Edge</th><th class="num">Model</th><th class="num">Mkt$</th><th class="center">Status</th></tr>
       ${tradeRows}
-    </table>`;
+    </table>
+    </div>`;
 
   document.getElementById("headline").textContent = data.latest_headline
     ? `> ${data.latest_headline.source}: ${data.latest_headline.headline}`
@@ -308,6 +324,8 @@ def _build_polling_payload() -> dict:
             "edge_threshold": config.EDGE_THRESHOLD,
             "max_bet": config.MAX_BET_USD,
             "daily_limit": config.DAILY_LOSS_LIMIT_USD,
+            "tweets_today": None,
+            "tweets_cap": None,
         },
         "performance": _performance_snapshot(),
         "scanner_rows": scanner_rows,
@@ -361,6 +379,8 @@ def _build_attached_payload(pipeline) -> dict:
             "edge_threshold": config.EDGE_THRESHOLD,
             "max_bet": config.MAX_BET_USD,
             "daily_limit": config.DAILY_LOSS_LIMIT_USD,
+            "tweets_today": pipeline.news_aggregator.twitter.tweets_processed_today,
+            "tweets_cap": pipeline.news_aggregator.twitter.daily_tweet_cap,
         },
         "performance": _performance_snapshot(),
         "scanner_rows": scanner_rows,

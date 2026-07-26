@@ -232,6 +232,12 @@ class TwitterStream:
         self._reset_daily_cap_if_new_day()
         return bool(self.daily_tweet_cap) and self._tweets_read_today >= self.daily_tweet_cap
 
+    @property
+    def tweets_processed_today(self) -> int:
+        """Raw tweets read from the stream since UTC midnight (resets daily)."""
+        self._reset_daily_cap_if_new_day()
+        return self._tweets_read_today
+
     @staticmethod
     def _seconds_until_utc_midnight() -> float:
         now = datetime.now(timezone.utc)

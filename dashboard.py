@@ -131,39 +131,61 @@ def run_scan_cycle():
     state.scan_status = "Idle — waiting for next cycle"
 
 
-def make_layout() -> Layout:
+NARROW_WIDTH = 100
+
+
+def make_layout(narrow: bool) -> Layout:
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=3),
         Layout(name="body"),
         Layout(name="footer", size=3),
     )
-    layout["body"].split_row(
-        Layout(name="left", ratio=1),
-        Layout(name="right", ratio=2),
-    )
-    layout["left"].split_column(
-        Layout(name="status", ratio=1),
-        Layout(name="performance", ratio=1),
-    )
-    layout["right"].split_column(
-        Layout(name="scanner", ratio=2),
-        Layout(name="trades", ratio=3),
-    )
+    if narrow:
+        # Phone-width terminal: stack every panel full-width instead of
+        # splitting into columns, since side-by-side panels get squeezed
+        # into unreadable slivers below ~100 columns.
+        layout["body"].split_column(
+            Layout(name="status", ratio=2),
+            Layout(name="performance", ratio=2),
+            Layout(name="scanner", ratio=3),
+            Layout(name="trades", ratio=3),
+        )
+    else:
+        layout["body"].split_row(
+            Layout(name="left", ratio=1),
+            Layout(name="right", ratio=2),
+        )
+        layout["left"].split_column(
+            Layout(name="status", ratio=1),
+            Layout(name="performance", ratio=1),
+        )
+        layout["right"].split_column(
+            Layout(name="scanner", ratio=2),
+            Layout(name="trades", ratio=3),
+        )
     return layout
 
 
-def render_header() -> Panel:
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+def render_header(compact: bool = False) -> Panel:
+    now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC" if compact else "%Y-%m-%d %H:%M:%S UTC")
     grid = Table.grid(expand=True)
-    grid.add_column(justify="left", ratio=1)
-    grid.add_column(justify="center", ratio=2)
-    grid.add_column(justify="right", ratio=1)
-    grid.add_row(
-        Text(" POLYMARKET PIPELINE", style="bold bright_green"),
-        Text("EVENT MATCHER + RESOLUTION CLASSIFIER + GUARDED TRADER", style=DIM),
-        Text(f"{now} ", style=MUTED),
-    )
+    if compact:
+        grid.add_column(justify="left", ratio=1)
+        grid.add_column(justify="right", ratio=1)
+        grid.add_row(
+            Text(" POLYMARKET", style="bold bright_green"),
+            Text(f"{now} ", style=MUTED),
+        )
+    else:
+        grid.add_column(justify="left", ratio=1)
+        grid.add_column(justify="center", ratio=2)
+        grid.add_column(justify="right", ratio=1)
+        grid.add_row(
+            Text(" POLYMARKET PIPELINE", style="bold bright_green"),
+            Text("EVENT MATCHER + RESOLUTION CLASSIFIER + GUARDED TRADER", style=DIM),
+            Text(f"{now} ", style=MUTED),
+        )
     return Panel(grid, style="bright_green", box=box.HEAVY)
 
 
@@ -235,19 +257,24 @@ def render_performance() -> Panel:
     return Panel(table, title="[bold]PERFORMANCE[/bold]", border_style="bright_cyan", box=box.ROUNDED)
 
 
-def render_scanner() -> Panel:
+def render_scanner(compact: bool = False) -> Panel:
+    title = "[bold]MARKET SCANNER[/bold]" if compact else "[bold]MARKET SCANNER[/bold]  ·  Model Confidence vs Market Odds"
+    market_width = 20 if compact else 38
     content = Table(show_header=True, box=box.SIMPLE_HEAD, expand=True, padding=(0, 1))
-    content.add_column("Market", max_width=38)
-    content.add_column("Mkt$", justify="right", width=5)
-    content.add_column("Model", justify="right", width=6, style=ACCENT)
+    content.add_column("Market", max_width=market_width, no_wrap=True, overflow="ellipsis")
+    if not compact:
+        content.add_column("Mkt$", justify="right", width=5)
+        content.add_column("Model", justify="right", width=6, style=ACCENT)
     content.add_column("Edge", justify="right", width=6)
     content.add_column("Side", justify="center", width=5)
     content.add_column("Bet", justify="right", width=7)
     content.add_column("Status", justify="center", width=9)
 
+    blank_row = ["", "", "", ""] if compact else ["", "", "", "", "", ""]
+
     if not state.latest_markets:
-        content.add_row(f"[{DIM}]Waiting for first scan...[/{DIM}]", "", "", "", "", "", "")
-        return Panel(content, title="[bold]MARKET SCANNER[/bold]  ·  Model Confidence vs Market Odds", border_style="bright_green", box=box.ROUNDED)
+        content.add_row(f"[{DIM}]Waiting for first scan...[/{DIM}]", *blank_row)
+        return Panel(content, title=title, border_style="bright_green", box=box.ROUNDED)
 
     # Show signals first
     signal_questions = set()
@@ -267,15 +294,16 @@ def render_scanner() -> Panel:
         else:
             status_str = f"[{DIM}]{status[:9]}[/{DIM}]"
 
-        content.add_row(
-            m.question[:38],
-            f"{m.yes_price:.2f}",
-            f"{s['confidence']:.2f}",
+        row = [m.question[:market_width]]
+        if not compact:
+            row += [f"{m.yes_price:.2f}", f"{s['confidence']:.2f}"]
+        row += [
             f"[{WIN}]{edge_pct}[/{WIN}]",
             f"[{side_style}]{t['side']}[/{side_style}]",
             f"${t['amount']:.0f}",
             status_str,
-        )
+        ]
+        content.add_row(*row)
 
     # Fill with non-signal markets
     for m in state.latest_markets:
@@ -286,34 +314,40 @@ def render_scanner() -> Panel:
         score = state.latest_scores.get(m.condition_id, {})
         confidence = score.get("confidence", 0.5)
         edge = abs(confidence - m.yes_price)
-        content.add_row(
-            f"[{DIM}]{m.question[:38]}[/{DIM}]",
-            f"[{DIM}]{m.yes_price:.2f}[/{DIM}]",
-            f"[{DIM}]{confidence:.2f}[/{DIM}]",
+        row = [f"[{DIM}]{m.question[:market_width]}[/{DIM}]"]
+        if not compact:
+            row += [f"[{DIM}]{m.yes_price:.2f}[/{DIM}]", f"[{DIM}]{confidence:.2f}[/{DIM}]"]
+        row += [
             f"[{DIM}]{edge:.0%}[/{DIM}]",
             f"[{DIM}]—[/{DIM}]",
             f"[{DIM}]—[/{DIM}]",
             f"[{DIM}]no edge[/{DIM}]",
-        )
+        ]
+        content.add_row(*row)
 
-    return Panel(content, title="[bold]MARKET SCANNER[/bold]  ·  Model Confidence vs Market Odds", border_style="bright_green", box=box.ROUNDED)
+    return Panel(content, title=title, border_style="bright_green", box=box.ROUNDED)
 
 
-def render_trades() -> Panel:
+def render_trades(compact: bool = False) -> Panel:
     trades = logger.get_recent_trades(limit=10)
+    title = "[bold]TRADE LOG[/bold]" if compact else "[bold]TRADE LOG[/bold]  ·  Bets Placed by Pipeline"
+    market_width = 20 if compact else 38
 
     table = Table(show_header=True, box=box.SIMPLE_HEAD, expand=True, padding=(0, 1))
-    table.add_column("Time", width=16, style=MUTED)
-    table.add_column("Market", max_width=38)
+    table.add_column("Time", width=8 if compact else 16, style=MUTED, no_wrap=True, overflow="ellipsis")
+    table.add_column("Market", max_width=market_width, no_wrap=True, overflow="ellipsis")
     table.add_column("Side", justify="center", width=5)
     table.add_column("Bet", justify="right", width=7)
     table.add_column("Edge", justify="right", width=6)
-    table.add_column("Model", justify="right", width=6)
-    table.add_column("Mkt$", justify="right", width=5)
+    if not compact:
+        table.add_column("Model", justify="right", width=6)
+        table.add_column("Mkt$", justify="right", width=5)
     table.add_column("Status", justify="center", width=9)
 
+    blank_row = ["", "", "", "", ""] if compact else ["", "", "", "", "", "", ""]
+
     if not trades:
-        table.add_row(f"[{DIM}]No trades yet — pipeline scanning...[/{DIM}]", "", "", "", "", "", "", "")
+        table.add_row(f"[{DIM}]No trades yet — pipeline scanning...[/{DIM}]", *blank_row)
     else:
         for t in trades:
             side_style = WIN if t["side"] == "YES" else "bright_magenta"
@@ -329,54 +363,78 @@ def render_trades() -> Panel:
             else:
                 status_str = f"[{DIM}]{status[:9]}[/{DIM}]"
 
-            table.add_row(
-                t["created_at"][:16],
-                t["market_question"][:38],
+            time_str = t["created_at"][11:16] if compact and len(t["created_at"]) > 16 else t["created_at"][:16]
+            row = [
+                time_str,
+                t["market_question"][:market_width],
                 f"[{side_style}]{t['side']}[/{side_style}]",
                 f"${t['amount_usd']:.2f}",
                 f"{t['edge']:.0%}",
-                f"{t['claude_score']:.2f}",
-                f"{t['market_price']:.2f}",
-                status_str,
-            )
+            ]
+            if not compact:
+                row += [f"{t['claude_score']:.2f}", f"{t['market_price']:.2f}"]
+            row.append(status_str)
+            table.add_row(*row)
 
-    return Panel(table, title="[bold]TRADE LOG[/bold]  ·  Bets Placed by Pipeline", border_style="bright_cyan", box=box.ROUNDED)
+    return Panel(table, title=title, border_style="bright_cyan", box=box.ROUNDED)
 
 
-def render_footer() -> Panel:
+def render_footer(compact: bool = False) -> Panel:
     grid = Table.grid(expand=True)
-    grid.add_column(justify="left", ratio=2)
-    grid.add_column(justify="center", ratio=3)
-    grid.add_column(justify="right", ratio=2)
-
-    if state.latest_headlines:
-        h = state.latest_headlines[0]
-        headline_text = f"[{ACCENT}]>[/{ACCENT}] [{MUTED}]{h['source']}:[/{MUTED}] {h['headline'][:80]}"
-    else:
-        headline_text = f"[{DIM}]Waiting for news feed...[/{DIM}]"
 
     stats = logger.get_trade_stats()
     mode = "LIVE" if not config.DRY_RUN else "DRY"
 
-    grid.add_row(
-        headline_text,
-        f"[{DIM}]Ctrl+C to exit[/{DIM}]",
-        f"[{DIM}]{mode}[/{DIM}]  |  Signals: [{ACCENT}]{stats['total_trades']}[/{ACCENT}] ",
-    )
+    if compact:
+        headline_len = 40
+        if state.latest_headlines:
+            h = state.latest_headlines[0]
+            headline_text = f"[{ACCENT}]>[/{ACCENT}] {h['headline'][:headline_len]}"
+        else:
+            headline_text = f"[{DIM}]Waiting for news feed...[/{DIM}]"
+
+        grid.add_column(justify="left", ratio=3)
+        grid.add_column(justify="right", ratio=1)
+        grid.add_row(
+            headline_text,
+            f"[{DIM}]{mode}[/{DIM}] [{ACCENT}]{stats['total_trades']}[/{ACCENT}]",
+        )
+    else:
+        if state.latest_headlines:
+            h = state.latest_headlines[0]
+            headline_text = f"[{ACCENT}]>[/{ACCENT}] [{MUTED}]{h['source']}:[/{MUTED}] {h['headline'][:80]}"
+        else:
+            headline_text = f"[{DIM}]Waiting for news feed...[/{DIM}]"
+
+        grid.add_column(justify="left", ratio=2)
+        grid.add_column(justify="center", ratio=3)
+        grid.add_column(justify="right", ratio=2)
+        grid.add_row(
+            headline_text,
+            f"[{DIM}]Ctrl+C to exit[/{DIM}]",
+            f"[{DIM}]{mode}[/{DIM}]  |  Signals: [{ACCENT}]{stats['total_trades']}[/{ACCENT}] ",
+        )
     return Panel(grid, style="bright_green", box=box.HEAVY)
 
 
-def run_dashboard(scan_interval: float = 60.0):
-    """Launch the live dashboard. Scans on a configurable interval."""
-    layout = make_layout()
-
-    # Initial render
-    layout["header"].update(render_header())
+def render_all(layout: Layout, compact: bool) -> None:
+    layout["header"].update(render_header(compact))
     layout["status"].update(render_status())
     layout["performance"].update(render_performance())
-    layout["scanner"].update(render_scanner())
-    layout["trades"].update(render_trades())
-    layout["footer"].update(render_footer())
+    layout["scanner"].update(render_scanner(compact))
+    layout["trades"].update(render_trades(compact))
+    layout["footer"].update(render_footer(compact))
+
+
+def run_dashboard(scan_interval: float = 60.0):
+    """Launch the live dashboard. Scans on a configurable interval.
+
+    Layout adapts to terminal width so it stays usable when viewed from a
+    narrow mobile SSH client, not just a wide desktop terminal.
+    """
+    narrow = console.width < NARROW_WIDTH
+    layout = make_layout(narrow)
+    render_all(layout, narrow)
 
     try:
         with Live(layout, console=console, refresh_per_second=2, screen=True) as live:
@@ -389,12 +447,13 @@ def run_dashboard(scan_interval: float = 60.0):
                     run_scan_cycle()
                     last_scan = now
 
-                layout["header"].update(render_header())
-                layout["status"].update(render_status())
-                layout["performance"].update(render_performance())
-                layout["scanner"].update(render_scanner())
-                layout["trades"].update(render_trades())
-                layout["footer"].update(render_footer())
+                new_narrow = console.width < NARROW_WIDTH
+                if new_narrow != narrow:
+                    narrow = new_narrow
+                    layout = make_layout(narrow)
+                    live.update(layout)
+
+                render_all(layout, narrow)
 
                 time.sleep(0.5)
 
