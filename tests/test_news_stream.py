@@ -45,8 +45,36 @@ def test_twitter_api_problem_title_exposes_safe_error_name():
     assert TwitterStream._api_problem_title(response) == "CreditsDepleted"
 
 
+def test_twitter_daily_cap_tracks_reads_and_resets_next_day(monkeypatch):
+    stream = TwitterStream("token", [], daily_tweet_cap=2)
+
+    current = datetime(2026, 1, 1, 23, 59, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        news_stream, "datetime",
+        type("_FrozenDatetime", (), {
+            "now": staticmethod(lambda tz=None: current),
+            "fromisoformat": datetime.fromisoformat,
+        }),
+    )
+
+    assert stream._cap_reached() is False
+    stream._tweets_read_today = 2
+    assert stream._cap_reached() is True
+    assert stream._seconds_until_utc_midnight() == 60.0
+
+    # Next UTC day resets the counter even though the object is reused.
+    current = datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc)
+    assert stream._cap_reached() is False
+
+
+def test_twitter_zero_cap_disables_the_limit():
+    stream = TwitterStream("token", [], daily_tweet_cap=0)
+    stream._tweets_read_today = 1_000_000
+    assert stream._cap_reached() is False
+
+
 def test_corroboration_counts_independent_groups_only():
-    aggregator = NewsAggregator(output_queue=None)
+    aggregator = NewsAggregator(output_queue=asyncio.Queue())
     now = datetime.now(timezone.utc)
     first = NewsEvent(
         "איראן שיגרה טילים לעבר ישראל",

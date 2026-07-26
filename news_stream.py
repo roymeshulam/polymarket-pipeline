@@ -7,7 +7,7 @@ import logging
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -153,8 +153,14 @@ class TwitterStream:
         self,
         bearer_token: str,
         profiles: list[SourceProfile] | list[str],
+        daily_tweet_cap: int | None = None,
     ):
         self.bearer_token = bearer_token
+        self.daily_tweet_cap = (
+            config.TWITTER_DAILY_TWEET_CAP if daily_tweet_cap is None else daily_tweet_cap
+        )
+        self._tweets_read_today = 0
+        self._cap_day = None
         # Preserve the small rate-limit unit tests that construct keyword lists.
         resolved_profiles: list[SourceProfile]
         if profiles and all(isinstance(profile, str) for profile in profiles):
@@ -215,6 +221,24 @@ class TwitterStream:
             except ValueError:
                 pass
         return max(60, min(900, fallback))
+
+    def _reset_daily_cap_if_new_day(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        if self._cap_day != today:
+            self._cap_day = today
+            self._tweets_read_today = 0
+
+    def _cap_reached(self) -> bool:
+        self._reset_daily_cap_if_new_day()
+        return bool(self.daily_tweet_cap) and self._tweets_read_today >= self.daily_tweet_cap
+
+    @staticmethod
+    def _seconds_until_utc_midnight() -> float:
+        now = datetime.now(timezone.utc)
+        midnight = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return (midnight - now).total_seconds()
 
     async def setup_rules(self) -> None:
         if not self.enabled:
@@ -277,6 +301,15 @@ class TwitterStream:
 
         backoff = 1
         while True:
+            if self._cap_reached():
+                sleep_seconds = self._seconds_until_utc_midnight()
+                log.info(
+                    "[twitter] Daily tweet cap (%s) reached; reconnecting in %.0fs",
+                    self.daily_tweet_cap,
+                    sleep_seconds,
+                )
+                await asyncio.sleep(sleep_seconds)
+                continue
             try:
                 async with httpx.AsyncClient() as client:
                     async with client.stream(
@@ -305,8 +338,11 @@ class TwitterStream:
                         async for line in response.aiter_lines():
                             if not line.strip():
                                 continue
+                            if self._cap_reached():
+                                break
                             try:
                                 payload = json.loads(line)
+                                self._tweets_read_today += 1
                                 profile = self._matching_profile(payload)
                                 tweet = payload.get("data", {})
                                 if profile is None or not tweet.get("text"):

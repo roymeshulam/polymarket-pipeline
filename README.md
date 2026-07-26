@@ -59,7 +59,8 @@ python cli.py verify
 
 Set `OPENAI_API_KEY` in `.env`. RSS works without an additional API key. Set
 `TWITTER_BEARER_TOKEN` or `TELEGRAM_BOT_TOKEN` only when the corresponding
-profiles are enabled.
+profiles are enabled. `TWITTER_DAILY_TWEET_CAP` (default `200`, `0` disables)
+bounds worst-case X API spend per day.
 
 ### Automated deployment
 
@@ -109,7 +110,7 @@ Each source has an independent policy:
 Policy fields:
 
 | Field | Meaning |
-|---|---|
+| --- | --- |
 | `id` | Stable ID used in logs and the live allowlist |
 | `kind` | `rss`, `twitter`, or `telegram` |
 | `independence_group` | Shared origin used for corroboration counting |
