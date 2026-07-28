@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import config
 import logger
 from dashboard import state, run_scan_cycle
+from edge import REASON_LABELS
 
 # Set by start_attached_dashboard() when serving alongside a live PipelineV2
 # (i.e. `cli.py watch`). While set, the server reads that pipeline's in-memory
@@ -189,6 +190,9 @@ function render(data) {
     <div class="row"><span class="label">Total Wagered</span><span class="win">$${p.total_wagered.toFixed(2)}</span></div>
     <div class="row"><span class="label">Avg Edge</span><span class="win">${p.avg_edge.toFixed(1)}%</span></div>
     ${p.best_edge !== null ? `<div class="row"><span class="label">Best Edge</span><span class="win">${(p.best_edge * 100).toFixed(1)}%</span></div>` : ""}
+    <div class="row">&nbsp;</div>
+    <div class="row"><span class="label">Classified (24h)</span><span class="win">${p.classified_24h}</span></div>
+    ${p.top_rejection_reasons.map(r => `<div class="row"><span class="label dim">&nbsp;&nbsp;${r.label}</span><span class="dim">${r.count}</span></div>`).join("")}
   `;
 
   let scannerRows = "";
@@ -203,7 +207,7 @@ function render(data) {
         <td data-label="Edge" class="num ${r.is_signal ? 'win' : ''}">${(r.edge * 100).toFixed(0)}%</td>
         <td data-label="Side" class="center ${r.side === 'YES' ? 'side-yes' : 'side-no'}">${r.side ?? "—"}</td>
         <td data-label="Bet" class="num">${r.bet !== null ? "$" + r.bet.toFixed(0) : "—"}</td>
-        <td data-label="Status" class="center ${statusClass(r.status)}">${r.is_signal ? statusLabel(r.status) : "no edge"}</td>
+        <td data-label="Status" class="center ${statusClass(r.status)}">${r.is_signal ? statusLabel(r.status) : r.reason_label}</td>
       </tr>`).join("");
   }
   document.getElementById("scanner").innerHTML = `
@@ -278,6 +282,13 @@ def _performance_snapshot() -> dict:
     avg_edge = sum(t.get("edge", 0) for t in perf_trades) / max(len(perf_trades), 1) * 100
     best_edge = max((t.get("edge", 0) for t in perf_trades), default=None)
 
+    cls_stats = logger.get_classification_stats(hours=24)
+    top_rejections = sorted(
+        ((reason, count) for reason, count in cls_stats["by_rejection_reason"].items()
+         if reason != "signal"),
+        key=lambda item: -item[1],
+    )[:3]
+
     return {
         "total_signals": stats["total_trades"],
         "dry_runs": by_status.get("dry_run", 0),
@@ -287,6 +298,11 @@ def _performance_snapshot() -> dict:
         "total_wagered": total_wagered,
         "avg_edge": avg_edge,
         "best_edge": best_edge,
+        "classified_24h": cls_stats["total"],
+        "top_rejection_reasons": [
+            {"label": REASON_LABELS.get(reason, reason), "count": count}
+            for reason, count in top_rejections
+        ],
     }
 
 
@@ -339,11 +355,12 @@ def _build_polling_payload() -> dict:
             "url": m.url or None,
             "mkt_price": m.yes_price,
             "model_confidence": confidence,
-            "edge": abs(confidence - m.yes_price),
+            "edge": score.get("edge", abs(confidence - m.yes_price)),
             "side": None,
             "bet": None,
             "status": None,
             "is_signal": False,
+            "reason_label": REASON_LABELS.get(score.get("reason", ""), "no data"),
         })
 
     latest_headline = state.latest_headlines[0] if state.latest_headlines else None
@@ -384,6 +401,7 @@ def _build_attached_payload(pipeline) -> dict:
         confidence = score["confidence"] if score else 0.5
         edge = score["edge"] if score else 0.0
         side = score["side"] if score else None
+        reason = score.get("reason", "") if score else ""
         scanner_rows.append({
             "question": m.question[:60],
             "url": m.url or None,
@@ -394,6 +412,7 @@ def _build_attached_payload(pipeline) -> dict:
             "bet": None,
             "status": None,
             "is_signal": side is not None,
+            "reason_label": REASON_LABELS.get(reason, "no data"),
         })
 
     recent_events = logger.get_recent_news_events(limit=1)

@@ -22,7 +22,7 @@ import logger
 from scraper import scrape_all
 from markets import fetch_target_markets, filter_by_categories, Market
 from classifier import classify_event
-from edge import detect_edge_v2
+from edge import evaluate_edge_v2, REASON_LABELS
 from executor import execute_trade
 from matcher import match_news_to_markets
 from news_stream import confirmed_events_from_news_items
@@ -97,12 +97,29 @@ def run_scan_cycle():
         )
         for market in matched_markets:
             classification = classify_event(event, market)
-            signal = detect_edge_v2(market, classification, event)
+            signal, reason, computed_edge = evaluate_edge_v2(market, classification, event)
+            logger.log_classification(
+                market_id=market.condition_id,
+                market_question=market.question,
+                news_headline=event.headline,
+                news_source=event.source_id or event.source,
+                relation_level=classification.relation_level,
+                direction=classification.direction,
+                materiality=classification.materiality,
+                estimated_yes_probability=classification.estimated_yes_probability,
+                market_price=market.yes_price,
+                edge=computed_edge,
+                confirmation_count=event.confirmation_count,
+                required_confirmations=event.required_confirmations,
+                signal_generated=signal is not None,
+                rejection_reason=reason,
+            )
             score = {
                 "confidence": classification.estimated_yes_probability,
                 "reasoning": classification.reasoning,
                 "relation_level": classification.relation_level,
-                "edge": signal.edge if signal else 0.0,
+                "edge": signal.edge if signal else computed_edge,
+                "reason": reason,
             }
             scores[market.condition_id] = score
             if signal:
@@ -225,6 +242,7 @@ def render_performance() -> Panel:
     stats = logger.get_trade_stats()
     trades = logger.get_recent_trades(limit=100)
     daily_spent = abs(logger.get_daily_pnl())
+    cls_stats = logger.get_classification_stats(hours=24)
 
     total = stats["total_trades"]
     by_status = stats["by_status"]
@@ -253,6 +271,17 @@ def render_performance() -> Panel:
     if trades:
         best = max(t.get("edge", 0) for t in trades)
         table.add_row("Best Edge", f"[{WIN}]{best:.1%}[/{WIN}]")
+
+    table.add_row("", "")
+    table.add_row("Classified (24h)", f"[{ACCENT}]{cls_stats['total']}[/{ACCENT}]")
+    top_rejections = sorted(
+        ((reason, count) for reason, count in cls_stats["by_rejection_reason"].items()
+         if reason != "signal"),
+        key=lambda item: -item[1],
+    )[:3]
+    for reason, count in top_rejections:
+        label = REASON_LABELS.get(reason, reason)
+        table.add_row(f"  {label}", f"[{DIM}]{count}[/{DIM}]")
 
     return Panel(table, title="[bold]PERFORMANCE[/bold]", border_style="bright_cyan", box=box.ROUNDED)
 
@@ -313,7 +342,8 @@ def render_scanner(compact: bool = False) -> Panel:
             break
         score = state.latest_scores.get(m.condition_id, {})
         confidence = score.get("confidence", 0.5)
-        edge = abs(confidence - m.yes_price)
+        edge = score.get("edge", abs(confidence - m.yes_price))
+        reason_label = REASON_LABELS.get(score.get("reason", ""), "no data")
         row = [f"[{DIM}]{m.question[:market_width]}[/{DIM}]"]
         if not compact:
             row += [f"[{DIM}]{m.yes_price:.2f}[/{DIM}]", f"[{DIM}]{confidence:.2f}[/{DIM}]"]
@@ -321,7 +351,7 @@ def render_scanner(compact: bool = False) -> Panel:
             f"[{DIM}]{edge:.0%}[/{DIM}]",
             f"[{DIM}]—[/{DIM}]",
             f"[{DIM}]—[/{DIM}]",
-            f"[{DIM}]no edge[/{DIM}]",
+            f"[{DIM}]{reason_label[:9]}[/{DIM}]",
         ]
         content.add_row(*row)
 

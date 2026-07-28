@@ -42,6 +42,7 @@ def _stub_run_logging(monkeypatch):
         lambda *args: endings.append(args),
     )
     monkeypatch.setattr(pipeline.logger, "log_news_event", lambda **kwargs: 1)
+    monkeypatch.setattr(pipeline.logger, "log_classification", lambda **kwargs: 1)
     return endings
 
 

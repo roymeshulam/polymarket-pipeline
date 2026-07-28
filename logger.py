@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "trades.db"
@@ -92,6 +92,25 @@ def init_db():
             order_id TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS classifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            news_headline TEXT NOT NULL,
+            news_source TEXT NOT NULL,
+            market_id TEXT NOT NULL,
+            market_question TEXT NOT NULL,
+            relation_level TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            materiality REAL NOT NULL,
+            estimated_yes_probability REAL NOT NULL,
+            market_price REAL NOT NULL,
+            edge REAL NOT NULL,
+            confirmation_count INTEGER NOT NULL,
+            required_confirmations INTEGER NOT NULL,
+            signal_generated INTEGER NOT NULL DEFAULT 0,
+            rejection_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS market_trade_locks (
@@ -207,6 +226,86 @@ def log_news_event(
     conn.commit()
     conn.close()
     return event_id
+
+
+def log_classification(
+    market_id: str,
+    market_question: str,
+    news_headline: str,
+    news_source: str,
+    relation_level: str,
+    direction: str,
+    materiality: float,
+    estimated_yes_probability: float,
+    market_price: float,
+    edge: float,
+    confirmation_count: int,
+    required_confirmations: int,
+    signal_generated: bool,
+    rejection_reason: str = "",
+) -> int:
+    """Record every matched-market classification, signal or not.
+
+    news_events only stores match counts; this captures why each match did or
+    didn't become a signal, so rejection reasons can be analyzed after the fact.
+    """
+    conn = _conn()
+    cur = conn.execute(
+        """INSERT INTO classifications
+           (news_headline, news_source, market_id, market_question,
+            relation_level, direction, materiality, estimated_yes_probability,
+            market_price, edge, confirmation_count, required_confirmations,
+            signal_generated, rejection_reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (news_headline, news_source, market_id, market_question,
+         relation_level, direction, materiality, estimated_yes_probability,
+         market_price, edge, confirmation_count, required_confirmations,
+         1 if signal_generated else 0, rejection_reason or None),
+    )
+    row_id = cur.lastrowid
+    if row_id is None:
+        conn.rollback()
+        conn.close()
+        raise RuntimeError("SQLite did not return an ID for the inserted classification")
+    conn.commit()
+    conn.close()
+    return row_id
+
+
+def get_classification_stats(hours: int = 24) -> dict:
+    """Breakdown of matched-market classification outcomes for the trailing window."""
+    conn = _conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    total = conn.execute(
+        "SELECT COUNT(*) as c FROM classifications WHERE created_at >= ?", (cutoff,)
+    ).fetchone()["c"]
+    by_relation = conn.execute(
+        """SELECT relation_level, COUNT(*) as c FROM classifications
+           WHERE created_at >= ? GROUP BY relation_level ORDER BY c DESC""",
+        (cutoff,),
+    ).fetchall()
+    by_rejection = conn.execute(
+        """SELECT COALESCE(rejection_reason, 'signal') as reason, COUNT(*) as c
+           FROM classifications WHERE created_at >= ?
+           GROUP BY reason ORDER BY c DESC""",
+        (cutoff,),
+    ).fetchall()
+    near_misses = conn.execute(
+        """SELECT market_question, news_headline, relation_level, direction,
+                  materiality, edge, rejection_reason, created_at
+           FROM classifications
+           WHERE created_at >= ? AND rejection_reason IN
+                 ('materiality_below_threshold', 'edge_below_threshold')
+           ORDER BY edge DESC, materiality DESC LIMIT 10""",
+        (cutoff,),
+    ).fetchall()
+    conn.close()
+    return {
+        "total": total,
+        "by_relation_level": {r["relation_level"]: r["c"] for r in by_relation},
+        "by_rejection_reason": {r["reason"]: r["c"] for r in by_rejection},
+        "near_misses": [dict(r) for r in near_misses],
+    }
 
 
 def log_calibration(

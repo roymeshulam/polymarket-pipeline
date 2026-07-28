@@ -17,7 +17,7 @@ import config
 import logger
 from scraper import scrape_all
 from markets import fetch_target_markets, filter_by_categories
-from edge import detect_edge_v2, Signal
+from edge import evaluate_edge_v2, Signal
 from executor import execute_trade, execute_trade_async
 from news_stream import (
     NewsAggregator,
@@ -112,12 +112,34 @@ class PipelineV2:
                 try:
                     classification = await classify_event_async(event, market)
 
-                    signal = detect_edge_v2(market, classification, event)
+                    signal, reason, computed_edge = evaluate_edge_v2(
+                        market, classification, event
+                    )
                     self.latest_scores[market.condition_id] = {
                         "confidence": classification.estimated_yes_probability,
-                        "edge": signal.edge if signal else 0.0,
+                        "edge": signal.edge if signal else computed_edge,
                         "side": signal.side if signal else None,
+                        "relation_level": classification.relation_level,
+                        "reason": reason,
                     }
+                    await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        logger.log_classification,
+                        market.condition_id,
+                        market.question,
+                        event.headline,
+                        event.source_id or event.source,
+                        classification.relation_level,
+                        classification.direction,
+                        classification.materiality,
+                        classification.estimated_yes_probability,
+                        market.yes_price,
+                        computed_edge,
+                        event.confirmation_count,
+                        event.required_confirmations,
+                        signal is not None,
+                        reason,
+                    )
                     if signal:
                         self.stats["signals_found"] += 1
                         await self.signal_queue.put(signal)
@@ -131,6 +153,23 @@ class PipelineV2:
                             f"→ {signal.side} ${signal.bet_amount} "
                             f"on \"{market.question[:40]}...\" "
                             f"({signal.total_latency_ms}ms)"
+                        )
+                    else:
+                        log.info(
+                            "[pipeline] No signal [%s] %s | %s dir:%s mat:%.2f "
+                            "fairYES:%.2f price:%.2f edge:%.3f confirm:%s/%s "
+                            "on \"%s\"",
+                            event.source_id or event.source,
+                            reason,
+                            classification.relation_level,
+                            classification.direction,
+                            classification.materiality,
+                            classification.estimated_yes_probability,
+                            market.yes_price,
+                            computed_edge,
+                            event.confirmation_count,
+                            event.required_confirmations,
+                            market.question[:60],
                         )
                 except Exception as e:
                     log.warning(f"[pipeline] Classification error: {e}")
@@ -285,7 +324,23 @@ def run_pipeline(
                 f"Materiality: {classification.materiality:.2f} | "
                 f"Fair YES: {classification.estimated_yes_probability:.2f}"
             )
-            signal = detect_edge_v2(market, classification, event)
+            signal, reason, computed_edge = evaluate_edge_v2(market, classification, event)
+            logger.log_classification(
+                market_id=market.condition_id,
+                market_question=market.question,
+                news_headline=event.headline,
+                news_source=event.source_id or event.source,
+                relation_level=classification.relation_level,
+                direction=classification.direction,
+                materiality=classification.materiality,
+                estimated_yes_probability=classification.estimated_yes_probability,
+                market_price=market.yes_price,
+                edge=computed_edge,
+                confirmation_count=event.confirmation_count,
+                required_confirmations=event.required_confirmations,
+                signal_generated=signal is not None,
+                rejection_reason=reason,
+            )
             if signal:
                 console.print(
                     f"     [green bold]SIGNAL: {signal.side} | "
@@ -297,7 +352,8 @@ def run_pipeline(
                 signals.append(signal)
             else:
                 console.print(
-                    "     [dim]No actionable resolution-aware edge.[/dim]"
+                    f"     [dim]No signal: {reason} "
+                    f"(edge:{computed_edge:.1%})[/dim]"
                 )
 
     # A scan may contain several reports about one market. Execute at most the

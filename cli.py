@@ -451,6 +451,7 @@ def cmd_stats(args):
     daily = logger.get_daily_pnl()
     latency = logger.get_latency_stats()
     cal = logger.get_calibration_stats()
+    cls_stats = logger.get_classification_stats(hours=args.hours)
 
     console.print(f"\n[bold]Pipeline Statistics[/bold]\n")
     console.print(f"  Total signals: {stats['total_trades']}")
@@ -468,6 +469,25 @@ def cmd_stats(args):
     if cal["total"] > 0:
         console.print(f"\n  [bold]Calibration:[/bold]")
         console.print(f"    Accuracy: {cal['accuracy']:.1f}% ({cal['total']} resolved)")
+
+    console.print(
+        f"\n  [bold]Matched-market classifications (last {args.hours}h): "
+        f"{cls_stats['total']}[/bold]"
+    )
+    if cls_stats["total"] > 0:
+        console.print("    By relation level:")
+        for level, count in cls_stats["by_relation_level"].items():
+            console.print(f"      {level}: {count}")
+        console.print("    By outcome:")
+        for reason, count in cls_stats["by_rejection_reason"].items():
+            console.print(f"      {reason}: {count}")
+        if cls_stats["near_misses"]:
+            console.print("    Closest near-misses (highest edge/materiality just below threshold):")
+            for nm in cls_stats["near_misses"][:5]:
+                console.print(
+                    f"      [{nm['rejection_reason']}] mat:{nm['materiality']:.2f} "
+                    f"edge:{nm['edge']:.1%} \"{nm['market_question'][:50]}\""
+                )
 
 
 def main():
@@ -533,6 +553,7 @@ def main():
 
     # stats
     p_stats = sub.add_parser("stats", help="Performance statistics")
+    p_stats.add_argument("--hours", type=int, default=24, help="Classification lookback window")
     p_stats.set_defaults(func=cmd_stats)
 
     args = parser.parse_args()
