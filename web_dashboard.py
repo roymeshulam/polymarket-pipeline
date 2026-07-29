@@ -16,6 +16,7 @@ import config
 import logger
 from dashboard import state, run_scan_cycle
 from edge import REASON_LABELS
+from matcher import CoverageGap, find_coverage_gaps
 
 # Set by start_attached_dashboard() when serving alongside a live PipelineV2
 # (i.e. `cli.py watch`). While set, the server reads that pipeline's in-memory
@@ -77,6 +78,11 @@ INDEX_HTML = """<!doctype html>
   .side-no { color: #e879f9; }
   .mkt-link { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
   .mkt-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .gap-badge {
+    display: inline-block; border: 1px solid var(--warn); color: var(--warn);
+    border-radius: 3px; padding: 0 5px; margin-left: 6px; font-size: 11px;
+  }
+  #coverage.ok { color: var(--muted); }
   footer {
     border: 2px solid var(--accent); padding: 6px 14px; margin-top: 10px;
     display: flex; justify-content: space-between; gap: 10px; color: var(--muted);
@@ -135,6 +141,10 @@ INDEX_HTML = """<!doctype html>
       <div class="panel"><h2>Market Scanner</h2><div id="scanner"></div></div>
       <div class="panel"><h2>Trade Log</h2><div id="trades"></div></div>
     </div>
+  </div>
+  <div class="panel" id="coverage-panel">
+    <h2>Matcher Coverage Gaps</h2>
+    <div id="coverage"></div>
   </div>
   <footer>
     <span id="headline">—</span>
@@ -242,6 +252,21 @@ function render(data) {
     </table>
     </div>`;
 
+  const cov = document.getElementById("coverage");
+  const covPanel = document.getElementById("coverage-panel");
+  if (!data.coverage_gaps.length) {
+    cov.className = "ok";
+    cov.innerHTML = `No gaps — every tracked market has a matchable entity + predicate concept.`;
+    covPanel.querySelector("h2").textContent = "Matcher Coverage Gaps";
+  } else {
+    cov.className = "";
+    covPanel.querySelector("h2").textContent = `Matcher Coverage Gaps (${data.coverage_gaps.length})`;
+    cov.innerHTML = data.coverage_gaps.map(g => `
+      <div class="row">
+        <span>${marketCell(g.question, g.url)}${g.missing.map(m => `<span class="gap-badge">missing ${m}</span>`).join("")}</span>
+      </div>`).join("");
+  }
+
   document.getElementById("headline").textContent = data.latest_headline
     ? `> ${data.latest_headline.source}: ${data.latest_headline.headline}`
     : "Waiting for news feed...";
@@ -304,6 +329,14 @@ def _performance_snapshot() -> dict:
             for reason, count in top_rejections
         ],
     }
+
+
+def _coverage_gap_rows(gaps: list[CoverageGap]) -> list[dict]:
+    return [{
+        "question": gap.question[:80],
+        "url": gap.url or None,
+        "missing": list(gap.missing),
+    } for gap in gaps]
 
 
 def _recent_trade_rows(limit: int = 10) -> list[dict]:
@@ -385,6 +418,7 @@ def _build_polling_payload() -> dict:
         "performance": _performance_snapshot(),
         "scanner_rows": scanner_rows,
         "trade_rows": _recent_trade_rows(),
+        "coverage_gaps": _coverage_gap_rows(find_coverage_gaps(state.latest_markets)),
         "latest_headline": latest_headline,
     }
 
@@ -443,6 +477,7 @@ def _build_attached_payload(pipeline) -> dict:
         "performance": _performance_snapshot(),
         "scanner_rows": scanner_rows,
         "trade_rows": _recent_trade_rows(),
+        "coverage_gaps": _coverage_gap_rows(pipeline.market_watcher.coverage_gaps),
         "latest_headline": latest_headline,
     }
 

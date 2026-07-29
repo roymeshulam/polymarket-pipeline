@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 import config
 from markets import Market, fetch_target_markets
+from matcher import CoverageGap, find_coverage_gaps
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +37,8 @@ class MarketWatcher:
     def __init__(self):
         self.snapshots: dict[str, MarketSnapshot] = {}
         self.tracked_markets: list[Market] = []
+        self.coverage_gaps: list[CoverageGap] = []
+        self._warned_gap_ids: set[str] = set()
         self._refresh_interval = 300  # refresh market list every 5 min
         self._ws_connected = False
         self.stats = {
@@ -82,8 +85,21 @@ class MarketWatcher:
             for stale_id in existing_ids - new_ids:
                 del self.snapshots[stale_id]
 
+            self.coverage_gaps = find_coverage_gaps(self.tracked_markets)
+            gap_ids = {gap.market_id for gap in self.coverage_gaps}
+            newly_found = [gap for gap in self.coverage_gaps if gap.market_id not in self._warned_gap_ids]
+            for gap in newly_found:
+                log.warning(
+                    "[coverage] Market unmatchable (missing %s concept): \"%s\" — "
+                    "add a Hebrew/English alias to CONCEPT_ALIASES in matcher.py",
+                    "+".join(gap.missing),
+                    gap.question,
+                )
+            self._warned_gap_ids = gap_ids
+
             self.stats["market_refreshes"] += 1
-            log.info(f"[watcher] Tracking {len(self.tracked_markets)} niche markets")
+            gap_suffix = f" ({len(self.coverage_gaps)} unmatchable — see dashboard)" if self.coverage_gaps else ""
+            log.info(f"[watcher] Tracking {len(self.tracked_markets)} niche markets{gap_suffix}")
 
         except Exception as e:
             log.warning(f"[watcher] Market refresh error: {e}")

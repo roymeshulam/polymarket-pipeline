@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from matcher import event_fingerprint, extract_concepts, rank_news_to_markets
+from matcher import event_fingerprint, extract_concepts, find_coverage_gaps, rank_news_to_markets
 from markets import Market
 
 
@@ -96,3 +96,43 @@ def test_airspace_market_requires_aviation_capable_source(monkeypatch):
     assert accepted
     assert accepted[0].shared_entities == ("israel",)
     assert {"aviation", "closure"} <= set(accepted[0].shared_predicates)
+
+
+def test_find_coverage_gaps_flags_market_with_no_predicate():
+    market = _market("Will Israel win the Eurovision Song Contest in 2026?")
+
+    gaps = find_coverage_gaps([market])
+
+    assert len(gaps) == 1
+    assert gaps[0].missing == ("predicate",)
+    assert gaps[0].concepts_found == ("israel",)
+
+
+def test_find_coverage_gaps_flags_market_with_no_entity():
+    # category deliberately not "israel" — _market()'s default category would
+    # otherwise inject the "israel" entity concept via the market_text join.
+    market = Market(
+        "condition",
+        "Will there be a major diplomatic normalization deal in 2026?",
+        "geopolitics",
+        0.5,
+        0.5,
+        10_000,
+        "",
+        True,
+        [],
+    )
+
+    gaps = find_coverage_gaps([market])
+
+    assert len(gaps) == 1
+    assert gaps[0].missing == ("entity",)
+
+
+def test_find_coverage_gaps_ignores_fully_covered_market():
+    market = _market(
+        "Will the Israel-Iran ceasefire continue through July 31?",
+        "A qualifying Israeli or Iranian air strike that impacts the other country ends it.",
+    )
+
+    assert find_coverage_gaps([market]) == []

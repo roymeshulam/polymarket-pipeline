@@ -151,6 +151,15 @@ CONCEPT_ALIASES: dict[str, tuple[str, ...]] = {
         "מפרק",
         "התפרקות",
     ),
+    "genocide": (
+        "genocide",
+        "genocidal",
+        "war crimes",
+        "crimes against humanity",
+        "רצח עם",
+        "פשעי מלחמה",
+        "פשעים נגד האנושות",
+    ),
     "closure": (
         "close",
         "closes",
@@ -218,6 +227,18 @@ class MarketMatch:
     shared_concepts: tuple[str, ...]
     shared_entities: tuple[str, ...] = ()
     shared_predicates: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CoverageGap:
+    """A tracked market that rank_news_to_markets() can never match to any
+    headline, in any language, because CONCEPT_ALIASES has no entity and/or
+    predicate alias covering its question/rules text."""
+    market_id: str
+    question: str
+    url: str
+    missing: tuple[str, ...]  # subset of ("entity", "predicate")
+    concepts_found: tuple[str, ...]
 
 
 def normalize_text(text: str) -> str:
@@ -339,6 +360,41 @@ def rank_news_to_markets(
 
     ranked.sort(key=lambda item: item.score, reverse=True)
     return ranked[:max_matches]
+
+
+def find_coverage_gaps(markets: Iterable[Market]) -> list[CoverageGap]:
+    """Flag tracked markets with no matchable entity and/or predicate concept.
+
+    rank_news_to_markets() requires a shared entity AND a shared predicate
+    before any headline can match a market (matcher.py's fail-closed design).
+    If a market's own question/rules text doesn't extract to at least one
+    concept in ENTITY_CONCEPTS and one in PREDICATE_CONCEPTS, no headline —
+    Hebrew or English — can ever match it, silently. This is almost always a
+    market introducing a new entity/predicate that hasn't been added to
+    CONCEPT_ALIASES yet.
+    """
+    gaps = []
+    for market in markets:
+        market_text = " ".join(
+            [market.question, market.rules, market.resolution_source, market.category]
+        )
+        concepts = extract_concepts(market_text)
+        missing = tuple(
+            label
+            for label, concept_set in (("entity", ENTITY_CONCEPTS), ("predicate", PREDICATE_CONCEPTS))
+            if not concepts & concept_set
+        )
+        if missing:
+            gaps.append(
+                CoverageGap(
+                    market_id=market.condition_id,
+                    question=market.question,
+                    url=market.url,
+                    missing=missing,
+                    concepts_found=tuple(sorted(concepts)),
+                )
+            )
+    return gaps
 
 
 def match_news_to_markets(
