@@ -23,6 +23,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             market_id TEXT NOT NULL,
             market_question TEXT NOT NULL,
+            market_url TEXT,
             claude_score REAL NOT NULL,
             market_price REAL NOT NULL,
             edge REAL NOT NULL,
@@ -141,6 +142,7 @@ def _migrate_v2_columns(conn):
         ("news_latency_ms", "INTEGER"),
         ("classification_latency_ms", "INTEGER"),
         ("total_latency_ms", "INTEGER"),
+        ("market_url", "TEXT"),
     ]
     for col_name, col_type in new_cols:
         if col_name not in columns:
@@ -179,6 +181,7 @@ def log_trade(
     news_latency_ms: int | None = None,
     classification_latency_ms: int | None = None,
     total_latency_ms: int | None = None,
+    market_url: str | None = None,
 ) -> int:
     conn = _conn()
     cur = conn.execute(
@@ -186,12 +189,14 @@ def log_trade(
            (market_id, market_question, claude_score, market_price, edge,
             side, amount_usd, order_id, status, reasoning, headlines,
             news_source, classification, materiality,
-            news_latency_ms, classification_latency_ms, total_latency_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            news_latency_ms, classification_latency_ms, total_latency_ms,
+            market_url)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (market_id, market_question, claude_score, market_price, edge,
          side, amount_usd, order_id, status, reasoning, headlines,
          news_source, classification, materiality,
-         news_latency_ms, classification_latency_ms, total_latency_ms),
+         news_latency_ms, classification_latency_ms, total_latency_ms,
+         market_url),
     )
     trade_id = cur.lastrowid
     if trade_id is None:

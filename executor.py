@@ -330,6 +330,7 @@ def _log_and_return(signal: Signal, status: str, order_id: str | None) -> dict:
     trade_id = logger.log_trade(
         market_id=signal.market.condition_id,
         market_question=signal.market.question,
+        market_url=signal.market.url,
         claude_score=signal.claude_score,
         market_price=signal.market_price,
         edge=signal.edge,

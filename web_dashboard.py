@@ -235,7 +235,7 @@ function render(data) {
     tradeRows = data.trade_rows.map(t => `
       <tr>
         <td data-label="Time" class="dim">${t.time}</td>
-        <td data-label="Market">${t.question}</td>
+        <td data-label="Market">${marketCell(t.question, t.url)}</td>
         <td data-label="Side" class="center ${t.side === 'YES' ? 'side-yes' : 'side-no'}">${t.side}</td>
         <td data-label="Bet" class="num">$${t.bet.toFixed(2)}</td>
         <td data-label="Edge" class="num">${(t.edge * 100).toFixed(0)}%</td>
@@ -344,6 +344,7 @@ def _recent_trade_rows(limit: int = 10) -> list[dict]:
     return [{
         "time": t["created_at"][:16],
         "question": t["market_question"][:60],
+        "url": t["market_url"] or None,
         "side": t["side"],
         "bet": t["amount_usd"],
         "edge": t["edge"],
