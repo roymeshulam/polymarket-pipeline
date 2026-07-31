@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
+import executor
 import logger
 from dashboard import state, run_scan_cycle
 from edge import REASON_LABELS
@@ -24,79 +25,157 @@ from matcher import CoverageGap, find_coverage_gaps
 # scan+trade loop concurrently with `watch` would double-execute real trades.
 _ACTIVE_PIPELINE = None
 
+# Wallet balance + open P&L, refreshed on its own timer (config.PORTFOLIO_REFRESH_MINUTES)
+# by _portfolio_loop rather than on every /api/state poll, since it's a network
+# round-trip to Polymarket rather than a local trades.db read.
+_PORTFOLIO_STATE = {
+    "balance_usd": None, "open_pnl_usd": None, "updated_at": None, "error": "not_checked_yet",
+}
+_portfolio_thread_started = False
+
+
+def _refresh_portfolio_state():
+    _PORTFOLIO_STATE.update(executor.fetch_portfolio_snapshot())
+    _PORTFOLIO_STATE["updated_at"] = _now_str()
+
+
+def _portfolio_loop(stop_event: threading.Event):
+    interval = max(config.PORTFOLIO_REFRESH_MINUTES, 1) * 60
+    while not stop_event.is_set():
+        _refresh_portfolio_state()
+        stop_event.wait(interval)
+
+
+def _start_portfolio_thread(stop_event: threading.Event | None = None):
+    """Idempotent: safe to call from both dashboard entry points."""
+    global _portfolio_thread_started
+    if _portfolio_thread_started:
+        return
+    _portfolio_thread_started = True
+    threading.Thread(
+        target=_portfolio_loop, args=(stop_event or threading.Event(),), daemon=True
+    ).start()
+
 INDEX_HTML = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Polymarket Pipeline</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='6'%20fill='%230a0e0a'%20stroke='%234ade80'%20stroke-width='2'/%3E%3Ctext%20x='16'%20y='23'%20font-family='Consolas,monospace'%20font-size='17'%20font-weight='bold'%20fill='%234ade80'%20text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='9'%20fill='%230b0d14'%20stroke='%23818cf8'%20stroke-width='2'/%3E%3Ctext%20x='16'%20y='23'%20font-family='-apple-system,Segoe%20UI,Arial,sans-serif'%20font-size='16'%20font-weight='700'%20fill='%23818cf8'%20text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E">
 <style>
   :root {
-    color-scheme: dark;
-    --bg: #0a0e0a; --panel: #10160f; --border: #1e3a1e;
-    --accent: #4ade80; --warn: #facc15; --loss: #f87171;
-    --muted: #6b7280; --text: #d1fae5;
+    color-scheme: dark light;
+    --bg: #0b0d14; --panel: #12151f; --panel-2: #171b28; --border: #242938;
+    --accent: #818cf8; --accent-strong: #6366f1; --accent-soft: rgba(129, 140, 248, 0.14);
+    --win: #34d399; --win-soft: rgba(52, 211, 153, 0.14);
+    --warn: #fbbf24; --warn-soft: rgba(251, 191, 36, 0.14);
+    --loss: #f87171; --loss-soft: rgba(248, 113, 113, 0.14);
+    --muted: #8b93a7; --text: #e7e9ee;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(0, 0, 0, 0.28);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f3f4f9; --panel: #ffffff; --panel-2: #f7f8fc; --border: #e3e6f0;
+      --accent: #4f46e5; --accent-strong: #4338ca; --accent-soft: rgba(79, 70, 229, 0.1);
+      --win: #059669; --win-soft: rgba(5, 150, 105, 0.1);
+      --warn: #d97706; --warn-soft: rgba(217, 119, 6, 0.1);
+      --loss: #dc2626; --loss-soft: rgba(220, 38, 38, 0.1);
+      --muted: #667085; --text: #1a1d29;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 30px rgba(15, 23, 42, 0.06);
+    }
   }
   * { box-sizing: border-box; }
   html, body { max-width: 100%; overflow-x: hidden; }
   body {
-    background: var(--bg); color: var(--text);
-    font-family: "Cascadia Code", "Consolas", ui-monospace, monospace;
-    font-size: 13px; margin: 0; padding: 12px;
+    background: var(--bg);
+    background-image: radial-gradient(circle at 12% -10%, var(--accent-soft), transparent 45%);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px; margin: 0; padding: 16px;
+    -webkit-font-smoothing: antialiased;
   }
   header {
-    display: flex; justify-content: space-between; align-items: center; gap: 10px;
-    border: 2px solid var(--accent); padding: 8px 14px; margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: center; gap: 14px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 12px 20px; margin-bottom: 14px; box-shadow: var(--shadow);
   }
-  header h1 { font-size: 15px; color: var(--accent); margin: 0; letter-spacing: 1px; flex-shrink: 0; }
-  header .sub { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  header .sub:last-child { flex-shrink: 0; }
-  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px; min-width: 0; }
-  .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  header .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  header .mark {
+    width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 14px;
+  }
+  header h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: 0.1px; flex-shrink: 0; }
+  header .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .sub:last-child { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 14px; min-width: 0; }
+  .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
   .panel {
-    border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
     background: var(--panel); min-width: 0; max-width: 100%; overflow: hidden;
+    box-shadow: var(--shadow);
   }
   .panel h2 {
-    font-size: 12px; color: var(--accent); margin: 0 0 8px 0;
-    text-transform: uppercase; letter-spacing: 1px;
+    font-size: 11px; font-weight: 700; color: var(--muted); margin: 0 0 12px 0;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    display: flex; align-items: center; gap: 7px;
   }
-  .row { display: flex; justify-content: space-between; padding: 2px 0; }
-  .row .label { color: var(--muted); }
+  .panel h2::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: 0; }
+  .row .label { color: var(--muted); font-size: 13px; }
+  .row > span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
   .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 3px 6px; white-space: nowrap; }
-  th { color: var(--muted); font-weight: normal; border-bottom: 1px solid var(--border); }
-  td.num, th.num { text-align: right; }
+  th, td { text-align: left; padding: 8px 10px; white-space: nowrap; font-size: 13px; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); }
+  td { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: var(--panel-2); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.center, th.center { text-align: center; }
   .dim { color: var(--muted); }
   .warn { color: var(--warn); }
-  .win { color: var(--accent); }
+  .win { color: var(--win); }
   .loss { color: var(--loss); }
-  .side-yes { color: var(--accent); }
-  .side-no { color: #e879f9; }
-  .mkt-link { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  .side-yes { color: var(--win); }
+  .side-no { color: #ec4899; }
+  td.center.win, td.center.warn, td.center.loss, td.center.side-yes, td.center.side-no {
+    font-weight: 600; border-radius: 8px;
+  }
+  td.center.win { background: var(--win-soft); }
+  td.center.warn { background: var(--warn-soft); }
+  td.center.loss { background: var(--loss-soft); }
+  td.center.side-yes { background: var(--win-soft); }
+  td.center.side-no { background: rgba(236, 72, 153, 0.14); }
+  .mkt-link { color: inherit; text-decoration: none; border-bottom: 1px solid transparent; transition: color .15s ease, border-color .15s ease; }
   .mkt-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
   .gap-badge {
-    display: inline-block; border: 1px solid var(--warn); color: var(--warn);
-    border-radius: 3px; padding: 0 5px; margin-left: 6px; font-size: 11px;
+    display: inline-flex; align-items: center; background: var(--warn-soft); color: var(--warn);
+    border-radius: 999px; padding: 2px 9px; margin-left: 8px; font-size: 11px; font-weight: 600;
   }
-  #coverage.ok { color: var(--muted); }
+  #coverage.ok { color: var(--muted); font-style: italic; }
   footer {
-    border: 2px solid var(--accent); padding: 6px 14px; margin-top: 10px;
-    display: flex; justify-content: space-between; gap: 10px; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 18px; margin-top: 14px; box-shadow: var(--shadow);
+    display: flex; justify-content: space-between; align-items: center; gap: 14px; color: var(--muted); font-size: 13px;
   }
   footer #headline {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
   }
-  footer #mode { flex-shrink: 0; }
+  footer #mode {
+    flex-shrink: 0; font-weight: 700; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 3px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  }
   @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
   @media (max-width: 640px) {
-    body { font-size: 12px; padding: 8px; }
-    header { padding: 6px 10px; }
+    body { font-size: 13px; padding: 10px; }
+    header { padding: 10px 14px; border-radius: 12px; }
     header .sub:first-of-type { display: none; }
-    .panel { padding: 9px 10px; }
+    .panel { padding: 12px 14px; border-radius: 12px; }
     .row { gap: 12px; }
     .row > :last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
     .table-scroll { overflow: visible; }
@@ -104,23 +183,23 @@ INDEX_HTML = """<!doctype html>
     #scanner tr:first-child, #trades tr:first-child { display: none; }
     #scanner tr:not(:first-child), #trades tr:not(:first-child) {
       display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 3px 14px; width: 100%; padding: 7px 0;
-      border-bottom: 1px solid var(--border);
+      gap: 4px 14px; width: 100%; padding: 10px 12px; margin-bottom: 8px;
+      background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
     }
-    #scanner tr:last-child, #trades tr:last-child { border-bottom: 0; }
+    #scanner tr:last-child, #trades tr:last-child { margin-bottom: 0; }
     #scanner td, #trades td {
       display: flex; justify-content: space-between; gap: 8px;
-      min-width: 0; padding: 2px 0; white-space: normal; text-align: right;
+      min-width: 0; padding: 2px 0; white-space: normal; text-align: right; border-bottom: 0;
     }
     #scanner td::before, #trades td::before {
-      content: attr(data-label); color: var(--muted); text-align: left;
+      content: attr(data-label); color: var(--muted); text-align: left; font-weight: 600;
     }
     #scanner td:first-child, #trades td:nth-child(2) {
-      grid-column: 1 / -1; padding-bottom: 5px; margin-bottom: 2px;
-      border-bottom: 1px dotted var(--border); overflow-wrap: anywhere;
+      grid-column: 1 / -1; padding-bottom: 6px; margin-bottom: 4px;
+      border-bottom: 1px dashed var(--border); overflow-wrap: anywhere;
     }
     #scanner td.empty, #trades td.empty {
-      grid-column: 1 / -1; display: block; text-align: left; border: 0;
+      grid-column: 1 / -1; display: block; text-align: left; border: 0; background: none;
     }
     #scanner td.empty::before, #trades td.empty::before { content: none; }
   }
@@ -128,14 +207,17 @@ INDEX_HTML = """<!doctype html>
 </head>
 <body>
   <header>
-    <h1>POLYMARKET PIPELINE</h1>
-    <span class="sub">EVENT MATCHER + RESOLUTION CLASSIFIER + GUARDED TRADER</span>
+    <div class="brand">
+      <div class="mark">P</div>
+      <h1>Polymarket Pipeline</h1>
+    </div>
+    <span class="sub">Event Matcher · Resolution Classifier · Guarded Trader</span>
     <span class="sub" id="clock">—</span>
   </header>
   <div class="grid">
     <div class="col">
+      <div class="panel"><h2>Portfolio</h2><div id="portfolio"></div></div>
       <div class="panel"><h2>Pipeline Status</h2><div id="status"></div></div>
-      <div class="panel"><h2>Performance</h2><div id="performance"></div></div>
     </div>
     <div class="col">
       <div class="panel"><h2>Market Scanner</h2><div id="scanner"></div></div>
@@ -171,7 +253,7 @@ function marketCell(question, url) {
 function render(data) {
   document.getElementById("clock").textContent = data.now;
   document.getElementById("mode").textContent =
-    data.mode + "  |  Signals: " + data.performance.total_signals;
+    data.mode + "  |  Signals: " + data.portfolio.total_signals;
 
   const s = data.status;
   document.getElementById("status").innerHTML = `
@@ -189,8 +271,14 @@ function render(data) {
     <div class="row"><span class="label">Mode</span><span class="${data.mode === 'LIVE' ? 'win' : 'warn'}">${data.mode}</span></div>
   `;
 
-  const p = data.performance;
-  document.getElementById("performance").innerHTML = `
+  const p = data.portfolio;
+  const balanceKnown = p.balance_usd !== null;
+  const pnlKnown = p.open_pnl_usd !== null;
+  const syncedTitle = p.portfolio_updated_at ? `Last checked ${p.portfolio_updated_at}` : "Not yet checked";
+  document.getElementById("portfolio").innerHTML = `
+    <div class="row"><span class="label" title="${syncedTitle}">Balance</span><span class="${balanceKnown ? 'win' : 'dim'}">${balanceKnown ? "$" + p.balance_usd.toFixed(2) : "—"}</span></div>
+    <div class="row"><span class="label" title="${syncedTitle}">Open P&amp;L</span><span class="${!pnlKnown ? 'dim' : (p.open_pnl_usd >= 0 ? 'win' : 'loss')}">${pnlKnown ? (p.open_pnl_usd >= 0 ? "+" : "") + "$" + p.open_pnl_usd.toFixed(2) : "—"}</span></div>
+    <div class="row">&nbsp;</div>
     <div class="row"><span class="label">Total Signals</span><span class="win">${p.total_signals}</span></div>
     <div class="row"><span class="label">Dry Runs</span><span class="warn">${p.dry_runs}</span></div>
     <div class="row"><span class="label">Executed</span><span class="win">${p.executed}</span></div>
@@ -293,10 +381,11 @@ def _now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def _performance_snapshot() -> dict:
-    """Trade performance summary — sourced from trades.db, so it's identical
-    regardless of whether dashboard.py's polling loop or the live PipelineV2
-    (`watch`) produced the trades."""
+def _portfolio_snapshot() -> dict:
+    """Wallet balance + open P&L (refreshed on its own timer, see
+    _portfolio_loop) plus a trade performance summary sourced from trades.db —
+    the latter is identical regardless of whether dashboard.py's polling loop
+    or the live PipelineV2 (`watch`) produced the trades."""
     stats = logger.get_trade_stats()
     perf_trades = logger.get_recent_trades(limit=100)
     daily_spent = abs(logger.get_daily_pnl())
@@ -315,6 +404,9 @@ def _performance_snapshot() -> dict:
     )[:3]
 
     return {
+        "balance_usd": _PORTFOLIO_STATE["balance_usd"],
+        "open_pnl_usd": _PORTFOLIO_STATE["open_pnl_usd"],
+        "portfolio_updated_at": _PORTFOLIO_STATE["updated_at"],
         "total_signals": stats["total_trades"],
         "dry_runs": by_status.get("dry_run", 0),
         "executed": by_status.get("executed", 0),
@@ -416,7 +508,7 @@ def _build_polling_payload() -> dict:
             "tweets_today": None,
             "tweets_cap": None,
         },
-        "performance": _performance_snapshot(),
+        "portfolio": _portfolio_snapshot(),
         "scanner_rows": scanner_rows,
         "trade_rows": _recent_trade_rows(),
         "coverage_gaps": _coverage_gap_rows(find_coverage_gaps(state.latest_markets)),
@@ -475,7 +567,7 @@ def _build_attached_payload(pipeline) -> dict:
             "tweets_today": pipeline.news_aggregator.twitter.tweets_processed_today,
             "tweets_cap": pipeline.news_aggregator.twitter.daily_tweet_cap,
         },
-        "performance": _performance_snapshot(),
+        "portfolio": _portfolio_snapshot(),
         "scanner_rows": scanner_rows,
         "trade_rows": _recent_trade_rows(),
         "coverage_gaps": _coverage_gap_rows(pipeline.market_watcher.coverage_gaps),
@@ -527,6 +619,7 @@ def run_web_dashboard(scan_interval: float = 60.0, host: str = "127.0.0.1", port
         target=_scan_loop, args=(scan_interval, stop_event), daemon=True
     )
     scan_thread.start()
+    _start_portfolio_thread(stop_event)
 
     server = ThreadingHTTPServer((host, port), DashboardRequestHandler)
     print(f"Web dashboard serving on http://{host}:{port}  (Ctrl+C to stop)")
@@ -551,6 +644,7 @@ def start_attached_dashboard(pipeline, host: str = "127.0.0.1", port: int | None
     global _ACTIVE_PIPELINE
     _ACTIVE_PIPELINE = pipeline
     port = port if port is not None else config.DASHBOARD_PORT
+    _start_portfolio_thread()
 
     server = ThreadingHTTPServer((host, port), DashboardRequestHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

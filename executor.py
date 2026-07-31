@@ -189,6 +189,60 @@ def _get_open_positions(market_id: str) -> list[dict]:
     return positions
 
 
+def _get_all_positions() -> list[dict]:
+    """All non-zero positions for the funder wallet, across every market."""
+    response = httpx.get(
+        POSITIONS_API,
+        params={"user": config.POLYMARKET_FUNDER_ADDRESS, "sizeThreshold": 0, "limit": 500},
+        timeout=10,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise ValueError("positions API returned a non-list response")
+    return [position for position in payload if isinstance(position, dict)]
+
+
+def _get_collateral_balance_usd() -> float:
+    """USDC collateral balance held by the funder wallet, via the CLOB API."""
+    from py_clob_client_v2 import AssetType, BalanceAllowanceParams
+
+    client = _build_client()
+    response = client.get_balance_allowance(
+        params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+    )
+    raw_balance = response.get("balance") if isinstance(response, dict) else response
+    return float(raw_balance) / 1_000_000
+
+
+def fetch_portfolio_snapshot() -> dict:
+    """Read-only wallet balance + open (unrealized) P&L from Polymarket.
+
+    Independent of DRY_RUN/live trading — this only reads account state and
+    never places orders. Open P&L only needs POLYMARKET_FUNDER_ADDRESS (public
+    Data API); balance additionally needs a working CLOB L2 auth (private key).
+    """
+    snapshot: dict = {"balance_usd": None, "open_pnl_usd": None, "error": None}
+    if not config.POLYMARKET_FUNDER_ADDRESS:
+        snapshot["error"] = "not_configured"
+        return snapshot
+
+    try:
+        positions = _get_all_positions()
+        snapshot["open_pnl_usd"] = sum(float(p.get("cashPnl", 0)) for p in positions)
+    except Exception as exc:
+        snapshot["error"] = f"positions_{type(exc).__name__}"
+
+    try:
+        snapshot["balance_usd"] = _get_collateral_balance_usd()
+    except ImportError:
+        snapshot["error"] = snapshot["error"] or "no_clob_client"
+    except Exception as exc:
+        snapshot["error"] = snapshot["error"] or f"balance_{type(exc).__name__}"
+
+    return snapshot
+
+
 def _remote_market_is_open(client, market_id: str) -> bool:
     """Return whether the wallet has an open order or position in this market."""
     from py_clob_client_v2 import OpenOrderParams
