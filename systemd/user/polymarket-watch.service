@@ -9,7 +9,7 @@ Type=simple
 WorkingDirectory=/home/meshulro/Projects/polymarket-pipeline
 EnvironmentFile=/home/meshulro/Projects/polymarket-pipeline/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/meshulro/Projects/polymarket-pipeline/.venv/bin/python cli.py watch
+ExecStart=/home/meshulro/Projects/polymarket-pipeline/.venv/bin/python cli.py watch --live
 Restart=always
 RestartSec=30
 KillSignal=SIGINT

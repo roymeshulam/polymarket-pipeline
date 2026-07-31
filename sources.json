@@ -13,7 +13,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "security", "police", "public_safety", "official"]
     },
     {
@@ -29,7 +29,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "security", "military", "aviation", "official"]
     },
     {
@@ -45,7 +45,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "politics", "security", "diplomacy", "official"]
     },
     {
@@ -61,7 +61,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": [
         "israel",
         "security",
@@ -84,7 +84,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": [
         "israel",
         "security",
@@ -107,7 +107,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "security", "military", "aviation", "official"]
     },
     {
@@ -123,7 +123,7 @@
       "relevance": 0.9,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": [
         "israel",
         "economics",
@@ -146,7 +146,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "emergency", "health", "casualties", "public_safety"]
     },
     {
@@ -162,7 +162,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": [
         "israel",
         "cyber",
@@ -185,7 +185,7 @@
       "relevance": 1.0,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": [
         "israel",
         "diplomacy",
@@ -208,7 +208,7 @@
       "relevance": 0.8,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": [
         "israel",
         "politics",
@@ -231,7 +231,7 @@
       "relevance": 0.9,
       "trust_tier": 1,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": [
         "israel",
         "justice",
@@ -255,7 +255,7 @@
       "relevance": 0.9,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
@@ -271,7 +271,7 @@
       "relevance": 0.9,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
@@ -287,7 +287,7 @@
       "relevance": 0.9,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
@@ -303,7 +303,7 @@
       "relevance": 0.8,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
@@ -319,7 +319,7 @@
       "relevance": 0.8,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
@@ -367,7 +367,7 @@
       "relevance": 0.75,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "technology", "cyber", "economics", "business"]
     },
     {
@@ -383,7 +383,7 @@
       "relevance": 0.8,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "economics", "finance", "technology", "business"]
     },
     {
@@ -399,7 +399,7 @@
       "relevance": 0.9,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "diplomacy", "foreign_policy", "politics", "security"]
     },
     {
@@ -415,7 +415,7 @@
       "relevance": 0.85,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "politics", "parliament", "elections", "government"]
     },
     {
@@ -431,7 +431,7 @@
       "relevance": 0.85,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "security", "military", "gaza", "lebanon", "iran"]
     },
     {
@@ -447,7 +447,7 @@
       "relevance": 0.9,
       "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
@@ -463,7 +463,7 @@
       "relevance": 0.85,
       "trust_tier": 2,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
@@ -479,7 +479,7 @@
       "relevance": 0.9,
       "trust_tier": 2,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "security", "military", "gaza", "lebanon", "iran"]
     },
     {
@@ -495,7 +495,7 @@
       "relevance": 0.8,
       "trust_tier": 2,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
@@ -511,7 +511,7 @@
       "relevance": 0.85,
       "trust_tier": 2,
       "min_confirmations": 1,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "politics", "security", "news"]
     }
   ]

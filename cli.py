@@ -95,7 +95,7 @@ def cmd_run(args):
 
 
 def _confirm_live_trading():
-    """Fail closed unless configuration and an interactive wallet check pass."""
+    """Fail closed unless configuration passes; require a typed wallet confirmation when a human is present."""
     import config
     from executor import validate_live_configuration
 
@@ -106,8 +106,11 @@ def _confirm_live_trading():
             console.print(f"  [red]- {error}[/red]")
         raise SystemExit(2)
     if not sys.stdin.isatty():
-        console.print("[red]Live trading requires an interactive terminal confirmation.[/red]")
-        raise SystemExit(2)
+        # No TTY (e.g. running under systemd): LIVE_TRADING_ACK, already required by
+        # validate_live_configuration() to exactly match POLYMARKET_FUNDER_ADDRESS, stands in
+        # for the typed confirmation below since no one is present to type it.
+        console.print("[red bold]No interactive terminal — proceeding on LIVE_TRADING_ACK alone.[/red bold]")
+        return
     expected = config.POLYMARKET_FUNDER_ADDRESS
     entered = input(f"Type the full funder address ({expected}) to enable live trading: ").strip()
     if entered.lower() != expected.lower():
