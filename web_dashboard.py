@@ -12,6 +12,7 @@ import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import classifier
 import config
 import executor
 import logger
@@ -306,6 +307,7 @@ function marketCell(question, url) {
 const INFO_TEXT = {
   pipeline_status: "Whether the pipeline is actively scanning/watching for news, or still starting up.",
   model: "The OpenAI model used to classify headlines against each market's exact resolution rules.",
+  model_calls_today: "Number of calls made to the classification model since UTC midnight (resets daily).",
   scan_cycle: "The sequential number of the current scan pass (synchronous `run` mode only; blank while running the async `watch` pipeline).",
   activity: "A live one-line summary of what the pipeline is doing right now.",
   markets_scanned: "How many active Polymarket markets are currently being tracked for matching.",
@@ -354,6 +356,7 @@ function render(data) {
   document.getElementById("status").innerHTML = `
     <div class="row"><span class="label">Pipeline${infoIcon('pipeline_status', 'Pipeline')}</span><span class="${s.pipeline_status === 'SCANNING' ? 'warn' : 'win'}">${s.pipeline_status}</span></div>
     <div class="row"><span class="label">Model${infoIcon('model', 'Model')}</span><span>${s.openai_model}</span></div>
+    <div class="row"><span class="label">Model Calls Today${infoIcon('model_calls_today', 'Model Calls Today')}</span><span>${s.model_calls_today ?? "—"}</span></div>
     <div class="row"><span class="label">Scan Cycle${infoIcon('scan_cycle', 'Scan Cycle')}</span><span>${s.scan_cycle ?? "—"}</span></div>
     <div class="row"><span class="label">Activity${infoIcon('activity', 'Activity')}</span><span class="dim">${s.activity}</span></div>
     <div class="row"><span class="label">Markets Scanned${infoIcon('markets_scanned', 'Markets Scanned')}</span><span>${s.markets_scanned ?? "—"}</span></div>
@@ -636,6 +639,7 @@ def _build_polling_payload() -> dict:
         "status": {
             "pipeline_status": pipeline_status,
             "openai_model": config.OPENAI_MODEL,
+            "model_calls_today": classifier.model_calls_today(),
             "scan_cycle": state.run_number or None,
             "activity": state.scan_status,
             "markets_scanned": state.markets_scanned if state.run_number else None,
@@ -708,6 +712,7 @@ def _build_attached_payload(pipeline) -> dict:
         "status": {
             "pipeline_status": "ACTIVE" if pipeline.running else "STARTING",
             "openai_model": config.OPENAI_MODEL,
+            "model_calls_today": classifier.model_calls_today(),
             "scan_cycle": None,
             "activity": (
                 f"news:{stats['news_processed']}  matched:{stats['markets_matched']}"

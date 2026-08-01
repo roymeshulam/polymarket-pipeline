@@ -21,7 +21,7 @@ import config
 import logger
 from scraper import scrape_all
 from markets import fetch_target_markets, filter_by_categories, Market
-from classifier import classify_event
+from classifier import classify_event, model_calls_today
 from edge import evaluate_edge_v2, REASON_LABELS
 from executor import execute_trade
 from matcher import match_news_to_markets
@@ -225,6 +225,7 @@ def render_status() -> Panel:
 
     table.add_row("Pipeline", status_text)
     table.add_row("Model", config.OPENAI_MODEL)
+    table.add_row("Model Calls Today", str(model_calls_today()))
     table.add_row("Scan Cycle", f"#{state.run_number}" if state.run_number > 0 else "—")
     table.add_row("Activity", f"[{DIM}]{state.scan_status[:30]}[/{DIM}]")
     table.add_row("Markets Scanned", str(state.markets_scanned) if state.run_number > 0 else "—")
