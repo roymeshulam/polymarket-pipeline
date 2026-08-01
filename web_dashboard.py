@@ -185,10 +185,7 @@ INDEX_HTML = """<!doctype html>
   footer {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     padding: 10px 18px; margin-top: 14px; box-shadow: var(--shadow);
-    display: flex; justify-content: space-between; align-items: center; gap: 14px; color: var(--muted); font-size: 13px;
-  }
-  footer #headline {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+    display: flex; justify-content: flex-end; align-items: center; gap: 14px; color: var(--muted); font-size: 13px;
   }
   footer #mode {
     flex-shrink: 0; font-weight: 700; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase;
@@ -203,29 +200,29 @@ INDEX_HTML = """<!doctype html>
     .row { gap: 12px; }
     .row > :last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
     .table-scroll { overflow: visible; }
-    #scanner table, #scanner tbody, #trades table, #trades tbody { display: block; width: 100%; }
-    #scanner tr:first-child, #trades tr:first-child { display: none; }
-    #scanner tr:not(:first-child), #trades tr:not(:first-child) {
+    #scanner table, #scanner tbody, #trades table, #trades tbody, #news table, #news tbody { display: block; width: 100%; }
+    #scanner tr:first-child, #trades tr:first-child, #news tr:first-child { display: none; }
+    #scanner tr:not(:first-child), #trades tr:not(:first-child), #news tr:not(:first-child) {
       display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 4px 14px; width: 100%; padding: 10px 12px; margin-bottom: 8px;
       background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
     }
-    #scanner tr:last-child, #trades tr:last-child { margin-bottom: 0; }
-    #scanner td, #trades td {
+    #scanner tr:last-child, #trades tr:last-child, #news tr:last-child { margin-bottom: 0; }
+    #scanner td, #trades td, #news td {
       display: flex; justify-content: space-between; gap: 8px;
       min-width: 0; padding: 2px 0; white-space: normal; text-align: right; border-bottom: 0;
     }
-    #scanner td::before, #trades td::before {
+    #scanner td::before, #trades td::before, #news td::before {
       content: attr(data-label); color: var(--muted); text-align: left; font-weight: 600;
     }
-    #scanner td:first-child, #trades td:nth-child(2) {
+    #scanner td:first-child, #trades td:nth-child(2), #news td:nth-child(3) {
       grid-column: 1 / -1; padding-bottom: 6px; margin-bottom: 4px;
       border-bottom: 1px dashed var(--border); overflow-wrap: anywhere;
     }
-    #scanner td.empty, #trades td.empty {
+    #scanner td.empty, #trades td.empty, #news td.empty {
       grid-column: 1 / -1; display: block; text-align: left; border: 0; background: none;
     }
-    #scanner td.empty::before, #trades td.empty::before { content: none; }
+    #scanner td.empty::before, #trades td.empty::before, #news td.empty::before { content: none; }
   }
 </style>
 </head>
@@ -249,9 +246,9 @@ INDEX_HTML = """<!doctype html>
       <h2>Matcher Coverage Gaps</h2>
       <div id="coverage"></div>
     </div>
+    <div class="panel"><h2>Latest News</h2><div id="news"></div></div>
   </div>
   <footer>
-    <span id="headline">—</span>
     <span id="mode">—</span>
   </footer>
 
@@ -384,9 +381,24 @@ function render(data) {
       </div>`).join("");
   }
 
-  document.getElementById("headline").textContent = data.latest_headline
-    ? `> ${data.latest_headline.source}: ${data.latest_headline.headline}`
-    : "Waiting for news feed...";
+  let newsRows = "";
+  if (!data.latest_headlines.length) {
+    newsRows = `<tr><td class="dim empty" colspan="3">Waiting for news feed...</td></tr>`;
+  } else {
+    newsRows = data.latest_headlines.map(h => `
+      <tr>
+        <td data-label="Time" class="dim">${h.time}</td>
+        <td data-label="Source">${h.source}</td>
+        <td data-label="Headline">${h.headline}</td>
+      </tr>`).join("");
+  }
+  document.getElementById("news").innerHTML = `
+    <div class="table-scroll">
+    <table>
+      <tr><th>Time</th><th>Source</th><th>Headline</th></tr>
+      ${newsRows}
+    </table>
+    </div>`;
 }
 
 async function poll() {
@@ -408,6 +420,15 @@ poll();
 
 def _now_str() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _format_ago(elapsed_hours: float) -> str:
+    """Render elapsed time as HH:MM ago. Clock skew or feeds publishing a
+    timestamp slightly in the future can make elapsed_hours negative; treat
+    that as "just now" rather than showing a nonsensical negative duration."""
+    total_minutes = max(round(elapsed_hours * 60), 0)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{hours:02d}:{minutes:02d} ago"
 
 
 def _portfolio_snapshot() -> dict:
@@ -532,7 +553,10 @@ def _build_polling_payload() -> dict:
             "reason_label": REASON_LABELS.get(score.get("reason", ""), "no data"),
         })
 
-    latest_headline = state.latest_headlines[0] if state.latest_headlines else None
+    latest_headlines = [
+        {"time": _format_ago(h["age_hours"]), "source": h["source"], "headline": h["headline"]}
+        for h in sorted(state.latest_headlines, key=lambda h: h["age_hours"])[:10]
+    ]
 
     return {
         "now": _now_str(),
@@ -558,7 +582,7 @@ def _build_polling_payload() -> dict:
         "scanner_rows": scanner_rows,
         "trade_rows": _recent_trade_rows(),
         "coverage_gaps": _coverage_gap_rows(find_coverage_gaps(state.latest_markets)),
-        "latest_headline": latest_headline,
+        "latest_headlines": latest_headlines,
     }
 
 
@@ -588,11 +612,22 @@ def _build_attached_payload(pipeline) -> dict:
             "reason_label": REASON_LABELS.get(reason, "no data"),
         })
 
-    recent_events = logger.get_recent_news_events(limit=1)
-    latest_headline = (
-        {"source": recent_events[0]["source"], "headline": recent_events[0]["headline"]}
-        if recent_events else None
-    )
+    recent_events = logger.get_recent_news_events(limit=10)
+    now = datetime.now(timezone.utc)
+    for e in recent_events:
+        received = datetime.fromisoformat(e["received_at"])
+        if received.tzinfo is None:
+            received = received.replace(tzinfo=timezone.utc)
+        e["_received_dt"] = received
+    recent_events.sort(key=lambda e: e["_received_dt"], reverse=True)
+    latest_headlines = [
+        {
+            "time": _format_ago((now - e["_received_dt"]).total_seconds() / 3600),
+            "source": e["source"],
+            "headline": e["headline"],
+        }
+        for e in recent_events
+    ]
 
     return {
         "now": _now_str(),
@@ -620,7 +655,7 @@ def _build_attached_payload(pipeline) -> dict:
         "scanner_rows": scanner_rows,
         "trade_rows": _recent_trade_rows(),
         "coverage_gaps": _coverage_gap_rows(pipeline.market_watcher.coverage_gaps),
-        "latest_headline": latest_headline,
+        "latest_headlines": latest_headlines,
     }
 
 

@@ -68,8 +68,8 @@ def run_scan_cycle():
     news = scrape_all()
     state.headlines_found = len(news)
     state.latest_headlines = [
-        {"headline": n.headline, "source": n.source, "age": f"{n.age_hours():.1f}h"}
-        for n in news[:8]
+        {"headline": n.headline, "source": n.source, "age_hours": n.age_hours()}
+        for n in news[:10]
     ]
     events = confirmed_events_from_news_items(news)
 
