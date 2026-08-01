@@ -307,54 +307,50 @@ def render_scanner(compact: bool = False) -> Panel:
         content.add_row(f"[{DIM}]Waiting for first scan...[/{DIM}]", *blank_row)
         return Panel(content, title=title, border_style="bright_green", box=box.ROUNDED)
 
-    # Show signals first
-    signal_questions = set()
-    for sig in state.latest_signals[:5]:
-        m = sig["market"]
-        s = sig["score"]
-        t = sig["trade"]
-        signal_questions.add(m.question)
-        edge_pct = f"{s['edge']:.0%}"
-        side_style = WIN if t["side"] == "YES" else "bright_magenta"
+    # Top 10 tracked markets by volume, largest first
+    signals_by_question = {sig["market"].question: sig for sig in state.latest_signals}
+    top_markets = sorted(state.latest_markets, key=lambda m: m.volume, reverse=True)[:10]
 
-        status = t.get("status", "dry_run")
-        if status == "dry_run":
-            status_str = f"[{WARN}]DRY RUN[/{WARN}]"
-        elif status == "executed":
-            status_str = f"[{WIN}]FILLED[/{WIN}]"
-        else:
-            status_str = f"[{DIM}]{status[:9]}[/{DIM}]"
-
-        row = [m.question[:market_width]]
-        if not compact:
-            row += [f"{m.yes_price:.2f}", f"{s['confidence']:.2f}"]
-        row += [
-            f"[{WIN}]{edge_pct}[/{WIN}]",
-            f"[{side_style}]{t['side']}[/{side_style}]",
-            f"${t['amount']:.0f}",
-            status_str,
-        ]
-        content.add_row(*row)
-
-    # Fill with non-signal markets
-    for m in state.latest_markets:
-        if m.question in signal_questions:
-            continue
-        if len(content.rows) >= 8:
-            break
+    for m in top_markets:
+        sig = signals_by_question.get(m.question)
         score = state.latest_scores.get(m.condition_id, {})
-        confidence = score.get("confidence", 0.5)
-        edge = score.get("edge", abs(confidence - m.yes_price))
-        reason_label = REASON_LABELS.get(score.get("reason", ""), "no data")
-        row = [f"[{DIM}]{m.question[:market_width]}[/{DIM}]"]
-        if not compact:
-            row += [f"[{DIM}]{m.yes_price:.2f}[/{DIM}]", f"[{DIM}]{confidence:.2f}[/{DIM}]"]
-        row += [
-            f"[{DIM}]{edge:.0%}[/{DIM}]",
-            f"[{DIM}]—[/{DIM}]",
-            f"[{DIM}]—[/{DIM}]",
-            f"[{DIM}]{reason_label[:9]}[/{DIM}]",
-        ]
+
+        if sig:
+            s = sig["score"]
+            t = sig["trade"]
+            edge_pct = f"{s['edge']:.0%}"
+            side_style = WIN if t["side"] == "YES" else "bright_magenta"
+
+            status = t.get("status", "dry_run")
+            if status == "dry_run":
+                status_str = f"[{WARN}]DRY RUN[/{WARN}]"
+            elif status == "executed":
+                status_str = f"[{WIN}]FILLED[/{WIN}]"
+            else:
+                status_str = f"[{DIM}]{status[:9]}[/{DIM}]"
+
+            row = [m.question[:market_width]]
+            if not compact:
+                row += [f"{m.yes_price:.2f}", f"{s['confidence']:.2f}"]
+            row += [
+                f"[{WIN}]{edge_pct}[/{WIN}]",
+                f"[{side_style}]{t['side']}[/{side_style}]",
+                f"${t['amount']:.0f}",
+                status_str,
+            ]
+        else:
+            confidence = score.get("confidence", 0.5)
+            edge = score.get("edge", abs(confidence - m.yes_price))
+            reason_label = REASON_LABELS.get(score.get("reason", ""), "no data")
+            row = [f"[{DIM}]{m.question[:market_width]}[/{DIM}]"]
+            if not compact:
+                row += [f"[{DIM}]{m.yes_price:.2f}[/{DIM}]", f"[{DIM}]{confidence:.2f}[/{DIM}]"]
+            row += [
+                f"[{DIM}]{edge:.0%}[/{DIM}]",
+                f"[{DIM}]—[/{DIM}]",
+                f"[{DIM}]—[/{DIM}]",
+                f"[{DIM}]{reason_label[:9]}[/{DIM}]",
+            ]
         content.add_row(*row)
 
     return Panel(content, title=title, border_style="bright_green", box=box.ROUNDED)

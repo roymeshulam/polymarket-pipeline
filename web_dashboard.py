@@ -594,37 +594,24 @@ def _build_polling_payload() -> dict:
     else:
         pipeline_status = "STARTING"
 
-    signal_questions = {sig["market"].question for sig in state.latest_signals}
+    signals_by_question = {sig["market"].question: sig for sig in state.latest_signals}
+    top_markets = sorted(state.latest_markets, key=lambda m: m.volume, reverse=True)[:10]
 
     scanner_rows = []
-    for sig in state.latest_signals[:5]:
-        m, s, t = sig["market"], sig["score"], sig["trade"]
-        scanner_rows.append({
-            "question": m.question[:60],
-            "url": m.url or None,
-            "mkt_price": m.yes_price,
-            "model_confidence": s["confidence"],
-            "edge": s["edge"],
-            "side": t["side"],
-            "bet": t["amount"],
-            "status": t.get("status", "dry_run"),
-            "is_signal": True,
-        })
-    for m in state.latest_markets:
-        if m.question in signal_questions or len(scanner_rows) >= 8:
-            continue
+    for m in top_markets:
+        sig = signals_by_question.get(m.question)
         score = state.latest_scores.get(m.condition_id, {})
-        confidence = score.get("confidence", 0.5)
+        confidence = sig["score"]["confidence"] if sig else score.get("confidence", 0.5)
         scanner_rows.append({
             "question": m.question[:60],
             "url": m.url or None,
             "mkt_price": m.yes_price,
             "model_confidence": confidence,
-            "edge": score.get("edge", abs(confidence - m.yes_price)),
-            "side": None,
-            "bet": None,
-            "status": None,
-            "is_signal": False,
+            "edge": sig["score"]["edge"] if sig else score.get("edge", abs(confidence - m.yes_price)),
+            "side": sig["trade"]["side"] if sig else None,
+            "bet": sig["trade"]["amount"] if sig else None,
+            "status": sig["trade"].get("status", "dry_run") if sig else None,
+            "is_signal": sig is not None,
             "reason_label": REASON_LABELS.get(score.get("reason", ""), "no data"),
         })
 
@@ -669,8 +656,10 @@ def _build_attached_payload(pipeline) -> dict:
     stats = pipeline.stats
     tracked = pipeline.market_watcher.tracked_markets
 
+    top_markets = sorted(tracked, key=lambda m: m.volume, reverse=True)[:10]
+
     scanner_rows = []
-    for m in tracked[:8]:
+    for m in top_markets:
         score = pipeline.latest_scores.get(m.condition_id)
         confidence = score["confidence"] if score else 0.5
         edge = score["edge"] if score else 0.0
