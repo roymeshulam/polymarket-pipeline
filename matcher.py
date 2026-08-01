@@ -76,6 +76,16 @@ CONCEPT_ALIASES: dict[str, tuple[str, ...]] = {
         "מכירה ב",
         "הכרה",
     ),
+    "nobel_prize": (
+        "nobel prize",
+        "wins the nobel",
+        "win the nobel",
+        "פרס נובל",
+        "יזכה בפרס נובל",
+        "זכייה בפרס נובל",
+        "קבלת פרס נובל",
+        "לקבל פרס נובל",
+    ),
     "annexation": (
         "annex",
         "annexes",

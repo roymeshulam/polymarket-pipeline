@@ -25,6 +25,28 @@ def test_extracts_canonical_concepts_from_hebrew():
     assert {"israel", "military", "strike", "iran", "drone"} <= concepts
 
 
+def test_extracts_nobel_prize_predicate_from_hebrew():
+    concepts = extract_concepts("נתניהו יזכה בפרס נובל לשלום בשנת 2026")
+
+    assert "nobel_prize" in concepts
+
+
+def test_matches_hebrew_report_to_english_nobel_market(monkeypatch):
+    monkeypatch.setattr("config.MARKET_MATCH_THRESHOLD", 0.1)
+    market = _market("Will Benjamin Netanyahu win the Nobel Peace Prize in 2026?")
+
+    matches = rank_news_to_markets(
+        "נתניהו יזכה בפרס נובל לשלום בשנת 2026",
+        "",
+        [market],
+        source_relevance=1.0,
+    )
+
+    assert matches
+    assert "netanyahu" in matches[0].shared_entities
+    assert matches[0].shared_predicates == ("nobel_prize",)
+
+
 def test_matches_hebrew_report_to_english_market(monkeypatch):
     monkeypatch.setattr("config.MARKET_MATCH_THRESHOLD", 0.1)
     iran = _market(
