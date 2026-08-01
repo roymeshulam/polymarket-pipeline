@@ -16,8 +16,6 @@ There is currently no dedicated `tests/` or assets directory. Add automated test
 - `python cli.py backtest --limit 50` evaluates the strategy on resolved markets.
 - `python cli.py dashboard` opens the terminal dashboard.
 
-On Unix-like systems, `bash setup.sh` automates environment creation and configuration.
-
 ## Coding Style & Naming Conventions
 
 Follow PEP 8 with four-space indentation. Use `snake_case` for functions, variables, and modules; `PascalCase` for classes; and `UPPER_SNAKE_CASE` for configuration constants. Keep modules focused on one pipeline responsibility. Add type hints to public functions and concise docstrings to classes or non-obvious workflows. Preserve the existing async style: do not introduce blocking network or database work into event-loop paths.

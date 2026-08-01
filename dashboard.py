@@ -224,6 +224,7 @@ def render_status() -> Panel:
     mode = "[bright_green]LIVE[/bright_green]" if not config.DRY_RUN else f"[{WARN}]DRY RUN[/{WARN}]"
 
     table.add_row("Pipeline", status_text)
+    table.add_row("Model", config.OPENAI_MODEL)
     table.add_row("Scan Cycle", f"#{state.run_number}" if state.run_number > 0 else "—")
     table.add_row("Activity", f"[{DIM}]{state.scan_status[:30]}[/{DIM}]")
     table.add_row("Markets Scanned", str(state.markets_scanned) if state.run_number > 0 else "—")

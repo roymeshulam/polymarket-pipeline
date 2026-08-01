@@ -15,7 +15,7 @@ def test_mobile_dashboard_is_contained_to_viewport():
         in INDEX_HTML_SOURCE
     )
     assert (
-        "grid-template-columns: minmax(0, 1fr) minmax(0, 2fr)"
+        "grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)"
         in INDEX_HTML_SOURCE
     )
     assert (

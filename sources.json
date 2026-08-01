@@ -467,6 +467,22 @@
       "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
     },
     {
+      "id": "ynet_story_1854_rss",
+      "kind": "rss",
+      "name": "ynet RSS 1854",
+      "independence_group": "ynet",
+      "enabled": true,
+      "language": "he",
+      "url": "https://www.ynet.co.il/Integration/StoryRss1854.xml",
+      "max_age_seconds": 300,
+      "poll_interval_seconds": 45,
+      "relevance": 0.85,
+      "trust_tier": 2,
+      "min_confirmations": 1,
+      "allow_live": true,
+      "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
+    },
+    {
       "id": "walla_security_rss",
       "kind": "rss",
       "name": "וואלה צבא וביטחון — RSS",
@@ -513,6 +529,54 @@
       "min_confirmations": 1,
       "allow_live": true,
       "topics": ["israel", "politics", "security", "news"]
+    },
+    {
+      "id": "zman_israel_rss",
+      "kind": "rss",
+      "name": "זמן ישראל — RSS",
+      "independence_group": "zman_israel",
+      "enabled": true,
+      "language": "he",
+      "url": "https://www.zman.co.il/feed/",
+      "max_age_seconds": 300,
+      "poll_interval_seconds": 60,
+      "relevance": 0.9,
+      "trust_tier": 2,
+      "min_confirmations": 2,
+      "allow_live": true,
+      "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
+    },
+    {
+      "id": "arutz7_breaking_rss",
+      "kind": "rss",
+      "name": "ערוץ 7 מבזקים — RSS",
+      "independence_group": "arutz7",
+      "enabled": true,
+      "language": "he",
+      "url": "https://www.inn.co.il/Rss.aspx",
+      "max_age_seconds": 300,
+      "poll_interval_seconds": 45,
+      "relevance": 0.8,
+      "trust_tier": 2,
+      "min_confirmations": 2,
+      "allow_live": true,
+      "topics": ["israel", "iran", "gaza", "lebanon", "politics", "security", "news"]
+    },
+    {
+      "id": "globes_home_rss",
+      "kind": "rss",
+      "name": "גלובס עמוד הבית — RSS",
+      "independence_group": "globes",
+      "enabled": true,
+      "language": "he",
+      "url": "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=2",
+      "max_age_seconds": 900,
+      "poll_interval_seconds": 60,
+      "relevance": 0.75,
+      "trust_tier": 2,
+      "min_confirmations": 2,
+      "allow_live": true,
+      "topics": ["israel", "politics", "economics", "business", "technology", "news"]
     }
   ]
 }

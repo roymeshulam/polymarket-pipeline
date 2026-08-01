@@ -138,26 +138,66 @@ def fetch_target_markets(
     return sorted(found.values(), key=lambda market: market.volume, reverse=True)
 
 
+def _extract_outcome_prices(data: dict) -> tuple[float, float]:
+    """Parse a Gamma market response's outcomePrices into (yes_price, no_price)."""
+    import json
+
+    outcome_prices = data.get("outcomePrices", "")
+    yes_price = 0.5
+    no_price = 0.5
+    if outcome_prices:
+        try:
+            prices = (
+                json.loads(outcome_prices)
+                if isinstance(outcome_prices, str)
+                else outcome_prices
+            )
+            if len(prices) >= 2:
+                yes_price = float(prices[0])
+                no_price = float(prices[1])
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+    return yes_price, no_price
+
+
+def fetch_current_prices(condition_ids: list[str]) -> dict[str, float]:
+    """Look up the live YES price for a set of markets by condition_id.
+
+    Used to mark open trade-log positions to market; omits any id Gamma
+    doesn't return (e.g. unknown/malformed ids) rather than raising.
+    """
+    condition_ids = [c for c in dict.fromkeys(condition_ids) if c]
+    if not condition_ids:
+        return {}
+    try:
+        resp = httpx.get(
+            f"{GAMMA_API}/markets",
+            params=[("condition_ids", cid) for cid in condition_ids],
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"[markets] Gamma API error fetching current prices: {e}")
+        return {}
+
+    items = data if isinstance(data, list) else data.get("data", [])
+    prices = {}
+    for item in items:
+        cid = str(item.get("conditionId", item.get("condition_id", "")) or "")
+        if not cid:
+            continue
+        yes_price, _ = _extract_outcome_prices(item)
+        prices[cid] = yes_price
+    return prices
+
+
 def _market_from_gamma(data: dict) -> Market | None:
     """Convert one Gamma market response into the internal model."""
     import json
 
     try:
-        outcome_prices = data.get("outcomePrices", "")
-        yes_price = 0.5
-        no_price = 0.5
-        if outcome_prices:
-            try:
-                prices = (
-                    json.loads(outcome_prices)
-                    if isinstance(outcome_prices, str)
-                    else outcome_prices
-                )
-                if len(prices) >= 2:
-                    yes_price = float(prices[0])
-                    no_price = float(prices[1])
-            except (json.JSONDecodeError, ValueError, TypeError):
-                pass
+        yes_price, no_price = _extract_outcome_prices(data)
 
         clob_token_ids = data.get("clobTokenIds", "")
         if isinstance(clob_token_ids, str):

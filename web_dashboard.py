@@ -15,9 +15,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import config
 import executor
 import logger
+import markets
 from dashboard import state, run_scan_cycle
 from edge import REASON_LABELS
 from matcher import CoverageGap, find_coverage_gaps
+from source_config import profiles_by_kind
+
+# Number of trades shown in the Trade Log panel; also bounds how many
+# markets get a live price lookup for the P&L columns.
+_TRADE_LOG_LIMIT = 10
+
+# sources.json is loaded once at process start (config.py import time), so
+# these counts are fixed for the life of the process, same as everything
+# else sourced from config.SOURCE_PROFILES.
+_TWITTER_SOURCE_COUNT = len(profiles_by_kind(config.SOURCE_PROFILES, "twitter"))
+_RSS_SOURCE_COUNT = len(profiles_by_kind(config.SOURCE_PROFILES, "rss"))
 
 # Set by start_attached_dashboard() when serving alongside a live PipelineV2
 # (i.e. `cli.py watch`). While set, the server reads that pipeline's in-memory
@@ -33,16 +45,28 @@ _PORTFOLIO_STATE = {
 }
 _portfolio_thread_started = False
 
+# Live YES price per market_id (condition_id), refreshed on the same timer as
+# the portfolio snapshot below. Backs the Trade Log's Mkt$/P&L columns without
+# hitting Gamma on every 2s /api/state poll.
+_TRADE_PRICE_CACHE: dict[str, float] = {}
+
 
 def _refresh_portfolio_state():
     _PORTFOLIO_STATE.update(executor.fetch_portfolio_snapshot())
     _PORTFOLIO_STATE["updated_at"] = _now_str()
 
 
+def _refresh_trade_prices():
+    trades = logger.get_recent_trades(limit=_TRADE_LOG_LIMIT)
+    market_ids = [t["market_id"] for t in trades]
+    _TRADE_PRICE_CACHE.update(markets.fetch_current_prices(market_ids))
+
+
 def _portfolio_loop(stop_event: threading.Event):
     interval = max(config.PORTFOLIO_REFRESH_MINUTES, 1) * 60
     while not stop_event.is_set():
         _refresh_portfolio_state()
+        _refresh_trade_prices()
         stop_event.wait(interval)
 
 
@@ -111,8 +135,8 @@ INDEX_HTML = """<!doctype html>
   header h1 { font-size: 15px; font-weight: 700; margin: 0; letter-spacing: 0.1px; flex-shrink: 0; }
   header .sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   header .sub:last-child { flex-shrink: 0; font-variant-numeric: tabular-nums; }
-  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 14px; min-width: 0; }
-  .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .stack { display: flex; flex-direction: column; gap: 14px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; min-width: 0; }
   .panel {
     border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px;
     background: var(--panel); min-width: 0; max-width: 100%; overflow: hidden;
@@ -214,19 +238,17 @@ INDEX_HTML = """<!doctype html>
     <span class="sub">Event Matcher · Resolution Classifier · Guarded Trader</span>
     <span class="sub" id="clock">—</span>
   </header>
-  <div class="grid">
-    <div class="col">
+  <div class="stack">
+    <div class="grid">
       <div class="panel"><h2>Portfolio</h2><div id="portfolio"></div></div>
       <div class="panel"><h2>Pipeline Status</h2><div id="status"></div></div>
     </div>
-    <div class="col">
-      <div class="panel"><h2>Market Scanner</h2><div id="scanner"></div></div>
-      <div class="panel"><h2>Trade Log</h2><div id="trades"></div></div>
+    <div class="panel"><h2>Trade Log</h2><div id="trades"></div></div>
+    <div class="panel"><h2>Market Scanner</h2><div id="scanner"></div></div>
+    <div class="panel" id="coverage-panel">
+      <h2>Matcher Coverage Gaps</h2>
+      <div id="coverage"></div>
     </div>
-  </div>
-  <div class="panel" id="coverage-panel">
-    <h2>Matcher Coverage Gaps</h2>
-    <div id="coverage"></div>
   </div>
   <footer>
     <span id="headline">—</span>
@@ -258,12 +280,16 @@ function render(data) {
   const s = data.status;
   document.getElementById("status").innerHTML = `
     <div class="row"><span class="label">Pipeline</span><span class="${s.pipeline_status === 'SCANNING' ? 'warn' : 'win'}">${s.pipeline_status}</span></div>
+    <div class="row"><span class="label">Model</span><span>${s.openai_model}</span></div>
     <div class="row"><span class="label">Scan Cycle</span><span>${s.scan_cycle ?? "—"}</span></div>
     <div class="row"><span class="label">Activity</span><span class="dim">${s.activity}</span></div>
     <div class="row"><span class="label">Markets Scanned</span><span>${s.markets_scanned ?? "—"}</span></div>
     <div class="row"><span class="label">Headlines Found</span><span>${s.headlines_found ?? "—"}</span></div>
     <div class="row"><span class="label">Tweets Today</span><span>${s.tweets_today ?? "—"}${s.tweets_cap ? ` / ${s.tweets_cap}` : ""}</span></div>
     <div class="row"><span class="label">Signals / Trades</span><span>${s.signals ?? "—"} / ${s.trades ?? "—"}</span></div>
+    <div class="row">&nbsp;</div>
+    <div class="row"><span class="label">Twitter Sources</span><span>${s.twitter_sources}</span></div>
+    <div class="row"><span class="label">RSS Sources</span><span>${s.rss_sources}</span></div>
     <div class="row">&nbsp;</div>
     <div class="row"><span class="label">Edge Threshold</span><span>&gt;= ${(s.edge_threshold * 100).toFixed(0)}%</span></div>
     <div class="row"><span class="label">Max Bet</span><span>$${s.max_bet.toFixed(2)}</span></div>
@@ -318,7 +344,7 @@ function render(data) {
 
   let tradeRows = "";
   if (!data.trade_rows.length) {
-    tradeRows = `<tr><td class="dim empty" colspan="8">No trades yet — pipeline scanning...</td></tr>`;
+    tradeRows = `<tr><td class="dim empty" colspan="11">No trades yet — pipeline scanning...</td></tr>`;
   } else {
     tradeRows = data.trade_rows.map(t => `
       <tr>
@@ -328,14 +354,17 @@ function render(data) {
         <td data-label="Bet" class="num">$${t.bet.toFixed(2)}</td>
         <td data-label="Edge" class="num">${(t.edge * 100).toFixed(0)}%</td>
         <td data-label="Model" class="num">${t.model.toFixed(2)}</td>
-        <td data-label="Mkt$" class="num">${t.mkt_price.toFixed(2)}</td>
+        <td data-label="Entry" class="num">${t.entry_price.toFixed(4)}</td>
+        <td data-label="Mkt$" class="num">${t.mkt_price.toFixed(4)}</td>
+        <td data-label="P&L¢" class="num ${t.pnl_cents > 0 ? 'win' : (t.pnl_cents < 0 ? 'loss' : '')}">${t.pnl_cents >= 0 ? "+" : ""}${t.pnl_cents.toFixed(1)}¢</td>
+        <td data-label="P&L%" class="num ${t.pnl_pct > 0 ? 'win' : (t.pnl_pct < 0 ? 'loss' : '')}">${t.pnl_pct >= 0 ? "+" : ""}${t.pnl_pct.toFixed(1)}%</td>
         <td data-label="Status" class="center ${statusClass(t.status)}">${statusLabel(t.status)}</td>
       </tr>`).join("");
   }
   document.getElementById("trades").innerHTML = `
     <div class="table-scroll">
     <table>
-      <tr><th>Time</th><th>Market</th><th class="center">Side</th><th class="num">Bet</th><th class="num">Edge</th><th class="num">Model</th><th class="num">Mkt$</th><th class="center">Status</th></tr>
+      <tr><th>Time</th><th>Market</th><th class="center">Side</th><th class="num">Bet</th><th class="num">Edge</th><th class="num">Model</th><th class="num">Entry</th><th class="num">Mkt$</th><th class="num">P&L¢</th><th class="num">P&L%</th><th class="center">Status</th></tr>
       ${tradeRows}
     </table>
     </div>`;
@@ -431,19 +460,33 @@ def _coverage_gap_rows(gaps: list[CoverageGap]) -> list[dict]:
     } for gap in gaps]
 
 
-def _recent_trade_rows(limit: int = 10) -> list[dict]:
+def _recent_trade_rows(limit: int = _TRADE_LOG_LIMIT) -> list[dict]:
     trades = logger.get_recent_trades(limit=limit)
-    return [{
-        "time": t["created_at"][:16],
-        "question": t["market_question"][:60],
-        "url": t["market_url"] or None,
-        "side": t["side"],
-        "bet": t["amount_usd"],
-        "edge": t["edge"],
-        "model": t["claude_score"],
-        "mkt_price": t["market_price"],
-        "status": t["status"],
-    } for t in trades]
+    rows = []
+    for t in trades:
+        # trades.market_price is always the YES price; convert to the price
+        # of the side actually traded so Entry/Mkt$/P&L read as what was paid.
+        yes_entry = t["market_price"]
+        yes_mkt = _TRADE_PRICE_CACHE.get(t["market_id"], yes_entry)
+        is_yes = t["side"] == "YES"
+        entry_price = yes_entry if is_yes else 1 - yes_entry
+        mkt_price = yes_mkt if is_yes else 1 - yes_mkt
+        pnl_delta = (mkt_price - entry_price) + 0.0  # avoid -0.0 display
+        rows.append({
+            "time": t["created_at"][:16],
+            "question": t["market_question"][:60],
+            "url": t["market_url"] or None,
+            "side": t["side"],
+            "bet": t["amount_usd"],
+            "edge": t["edge"],
+            "model": t["claude_score"],
+            "entry_price": entry_price,
+            "mkt_price": mkt_price,
+            "pnl_cents": pnl_delta * 100,
+            "pnl_pct": (pnl_delta / entry_price * 100) if entry_price else 0.0,
+            "status": t["status"],
+        })
+    return rows
 
 
 def _build_polling_payload() -> dict:
@@ -496,12 +539,15 @@ def _build_polling_payload() -> dict:
         "mode": "DRY RUN" if config.DRY_RUN else "LIVE",
         "status": {
             "pipeline_status": pipeline_status,
+            "openai_model": config.OPENAI_MODEL,
             "scan_cycle": state.run_number or None,
             "activity": state.scan_status,
             "markets_scanned": state.markets_scanned if state.run_number else None,
             "headlines_found": state.headlines_found if state.run_number else None,
             "signals": state.signals_found if state.run_number else None,
             "trades": state.trades_executed if state.run_number else None,
+            "twitter_sources": _TWITTER_SOURCE_COUNT,
+            "rss_sources": _RSS_SOURCE_COUNT,
             "edge_threshold": config.EDGE_THRESHOLD,
             "max_bet": config.MAX_BET_USD,
             "daily_limit": config.DAILY_LOSS_LIMIT_USD,
@@ -553,6 +599,7 @@ def _build_attached_payload(pipeline) -> dict:
         "mode": "DRY RUN" if config.DRY_RUN else "LIVE",
         "status": {
             "pipeline_status": "ACTIVE" if pipeline.running else "STARTING",
+            "openai_model": config.OPENAI_MODEL,
             "scan_cycle": None,
             "activity": (
                 f"news:{stats['news_processed']}  matched:{stats['markets_matched']}"
@@ -561,6 +608,8 @@ def _build_attached_payload(pipeline) -> dict:
             "headlines_found": stats["news_processed"],
             "signals": stats["signals_found"],
             "trades": stats["trades_executed"],
+            "twitter_sources": _TWITTER_SOURCE_COUNT,
+            "rss_sources": _RSS_SOURCE_COUNT,
             "edge_threshold": config.EDGE_THRESHOLD,
             "max_bet": config.MAX_BET_USD,
             "daily_limit": config.DAILY_LOSS_LIMIT_USD,
