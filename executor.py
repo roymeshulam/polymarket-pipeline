@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import re
 from datetime import datetime, timezone
@@ -131,6 +132,22 @@ async def execute_trade_async(signal: Signal) -> dict:
     return await asyncio.get_running_loop().run_in_executor(None, execute_trade, signal)
 
 
+def _create_or_derive_api_key(client):
+    """Return CLOB credentials, suppressing expected create-to-derive noise."""
+    sdk_logger = logging.getLogger("py_clob_client_v2.http_helpers.helpers")
+    was_disabled = sdk_logger.disabled
+    sdk_logger.disabled = True
+    try:
+        try:
+            return client.create_or_derive_api_key()
+        except Exception as exc:
+            raise RuntimeError(
+                "CLOB API credential creation and derivation both failed"
+            ) from exc
+    finally:
+        sdk_logger.disabled = was_disabled
+
+
 def _build_client():
     """Build and cache an authenticated CLOB V2 client."""
     global _CLOB_CLIENT
@@ -146,7 +163,7 @@ def _build_client():
         signature_type=config.POLYMARKET_SIGNATURE_TYPE,
         funder=config.POLYMARKET_FUNDER_ADDRESS,
     )
-    creds = bootstrap.create_or_derive_api_key()
+    creds = _create_or_derive_api_key(bootstrap)
     _CLOB_CLIENT = ClobClient(
         host=config.POLYMARKET_HOST,
         key=config.POLYMARKET_PRIVATE_KEY,

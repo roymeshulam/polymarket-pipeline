@@ -26,6 +26,39 @@ class FakeV2Client:
         return {"orderID": "v2-order"}
 
 
+def test_create_or_derive_suppresses_expected_create_failure(caplog):
+    calls = []
+
+    class Client:
+        def create_or_derive_api_key(self):
+            calls.append("create")
+            executor.logging.getLogger("py_clob_client_v2.http_helpers.helpers").warning(
+                "expected create failure before derive"
+            )
+            return "existing-creds"
+
+    sdk_logger = executor.logging.getLogger("py_clob_client_v2.http_helpers.helpers")
+    sdk_logger.disabled = False
+    with caplog.at_level("WARNING", logger="py_clob_client_v2.http_helpers.helpers"):
+        assert executor._create_or_derive_api_key(Client()) == "existing-creds"
+    assert calls == ["create"]
+    assert not caplog.records
+    assert sdk_logger.disabled is False
+
+
+def test_create_or_derive_raises_only_when_both_attempts_fail():
+    class Client:
+        def create_or_derive_api_key(self):
+            raise ValueError("both attempts failed")
+
+    try:
+        executor._create_or_derive_api_key(Client())
+    except RuntimeError as exc:
+        assert str(exc) == "CLOB API credential creation and derivation both failed"
+    else:
+        raise AssertionError("expected credential failure")
+
+
 def test_live_order_uses_v2_sdk_surface(monkeypatch):
     market = Market(
         "condition",
