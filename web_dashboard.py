@@ -182,6 +182,30 @@ INDEX_HTML = """<!doctype html>
     border-radius: 999px; padding: 2px 9px; margin-left: 8px; font-size: 11px; font-weight: 600;
   }
   #coverage.ok { color: var(--muted); font-style: italic; }
+  .info-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; margin-left: 6px; border-radius: 50%;
+    background: var(--panel-2); color: var(--muted); font-size: 10px; font-weight: 700;
+    font-style: normal; line-height: 1; border: 1px solid var(--border); cursor: pointer;
+    vertical-align: middle;
+  }
+  .info-icon:hover { color: var(--accent); border-color: var(--accent); }
+  .info-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+    align-items: center; justify-content: center; z-index: 1000; padding: 20px;
+  }
+  .info-overlay.open { display: flex; }
+  .info-modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 20px; max-width: 380px; width: 100%; box-shadow: var(--shadow);
+  }
+  .info-modal-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px; font-weight: 700; font-size: 14px;
+  }
+  .info-modal-close { cursor: pointer; color: var(--muted); font-size: 18px; line-height: 1; }
+  .info-modal-close:hover { color: var(--text); }
+  .info-modal-body { color: var(--text); font-size: 13px; line-height: 1.5; }
   footer {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     padding: 10px 18px; margin-top: 14px; box-shadow: var(--shadow);
@@ -238,7 +262,7 @@ INDEX_HTML = """<!doctype html>
   <div class="stack">
     <div class="grid">
       <div class="panel"><h2>Portfolio</h2><div id="portfolio"></div></div>
-      <div class="panel"><h2>Pipeline Status</h2><div id="status"></div></div>
+      <div class="panel"><h2>Pipeline</h2><div id="status"></div></div>
     </div>
     <div class="panel"><h2>Trade Log</h2><div id="trades"></div></div>
     <div class="panel"><h2>Market Scanner</h2><div id="scanner"></div></div>
@@ -251,6 +275,16 @@ INDEX_HTML = """<!doctype html>
   <footer>
     <span id="mode">—</span>
   </footer>
+
+  <div class="info-overlay" id="info-overlay" onclick="if (event.target === this) closeInfo()">
+    <div class="info-modal">
+      <div class="info-modal-head">
+        <span id="info-title"></span>
+        <span class="info-modal-close" onclick="closeInfo()">&times;</span>
+      </div>
+      <div class="info-modal-body" id="info-body"></div>
+    </div>
+  </div>
 
 <script>
 function statusClass(status) {
@@ -269,6 +303,48 @@ function marketCell(question, url) {
   const safeUrl = url.replace(/"/g, "%22");
   return `<a class="mkt-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">${question}</a>`;
 }
+const INFO_TEXT = {
+  pipeline_status: "Whether the pipeline is actively scanning/watching for news, or still starting up.",
+  model: "The OpenAI model used to classify headlines against each market's exact resolution rules.",
+  scan_cycle: "The sequential number of the current scan pass (synchronous `run` mode only; blank while running the async `watch` pipeline).",
+  activity: "A live one-line summary of what the pipeline is doing right now.",
+  markets_scanned: "How many active Polymarket markets are currently being tracked for matching.",
+  headlines_found: "Total news headlines ingested from all sources since this process started.",
+  tweets_today: "Tweets read from the X/Twitter stream since UTC midnight, out of the daily cap (TWITTER_DAILY_TWEET_CAP). Once the cap is hit, Twitter pauses for the rest of the day while RSS keeps running unaffected.",
+  rss_today: "New RSS articles digested across all configured RSS feeds since UTC midnight.",
+  signals_trades: "Trading signals detected this run, and how many of them resulted in an executed trade.",
+  twitter_sources: "Number of enabled X/Twitter source profiles configured in sources.json.",
+  rss_sources: "Number of enabled RSS source profiles configured in sources.json.",
+  edge_threshold: "The minimum fair-probability edge required before a signal is generated (EDGE_THRESHOLD).",
+  max_bet: "The maximum USD size for a single trade (MAX_BET_USD).",
+  daily_limit: "The maximum USD loss allowed in a day before live trading halts (DAILY_LOSS_LIMIT_USD).",
+  trading_mode: "Whether trades are placed for real on Polymarket (LIVE) or only logged without hitting the exchange (DRY RUN).",
+  balance: "Current USDC balance in the configured Polymarket wallet, refreshed on a timer (PORTFOLIO_REFRESH_MINUTES).",
+  open_pnl: "Unrealized profit/loss on currently open positions, marked to the latest market price.",
+  total_signals: "Total number of trading signals ever detected and logged to trades.db.",
+  dry_runs: "Signals that were logged but not sent as real orders, because dry-run mode was on or the signal wasn't live-eligible.",
+  executed: "Signals that resulted in an actual order placed on Polymarket.",
+  errors: "Signals that failed during execution due to an error.",
+  daily_exposure: "Total USD committed to trades placed so far today.",
+  total_wagered: "Cumulative USD wagered across all trades ever placed (most recent 100).",
+  avg_edge: "Average fair-probability edge across recent signals.",
+  best_edge: "The largest fair-probability edge seen among recent signals.",
+  classified_24h: "Number of news events run through the resolution classifier in the last 24 hours, broken down below by why non-signals were rejected.",
+};
+function infoIcon(key, label) {
+  return `<i class="info-icon" onclick="showInfo('${key}', '${label.replace(/'/g, "\\'")}')" title="What is this?">i</i>`;
+}
+function showInfo(key, label) {
+  const text = INFO_TEXT[key];
+  if (!text) return;
+  document.getElementById("info-title").textContent = label;
+  document.getElementById("info-body").textContent = text;
+  document.getElementById("info-overlay").classList.add("open");
+}
+function closeInfo() {
+  document.getElementById("info-overlay").classList.remove("open");
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeInfo(); });
 function render(data) {
   document.getElementById("clock").textContent = data.now;
   document.getElementById("mode").textContent =
@@ -276,22 +352,21 @@ function render(data) {
 
   const s = data.status;
   document.getElementById("status").innerHTML = `
-    <div class="row"><span class="label">Pipeline</span><span class="${s.pipeline_status === 'SCANNING' ? 'warn' : 'win'}">${s.pipeline_status}</span></div>
-    <div class="row"><span class="label">Model</span><span>${s.openai_model}</span></div>
-    <div class="row"><span class="label">Scan Cycle</span><span>${s.scan_cycle ?? "—"}</span></div>
-    <div class="row"><span class="label">Activity</span><span class="dim">${s.activity}</span></div>
-    <div class="row"><span class="label">Markets Scanned</span><span>${s.markets_scanned ?? "—"}</span></div>
-    <div class="row"><span class="label">Headlines Found</span><span>${s.headlines_found ?? "—"}</span></div>
-    <div class="row"><span class="label">Tweets Today</span><span>${s.tweets_today ?? "—"}${s.tweets_cap ? ` / ${s.tweets_cap}` : ""}</span></div>
-    <div class="row"><span class="label">Signals / Trades</span><span>${s.signals ?? "—"} / ${s.trades ?? "—"}</span></div>
-    <div class="row">&nbsp;</div>
-    <div class="row"><span class="label">Twitter Sources</span><span>${s.twitter_sources}</span></div>
-    <div class="row"><span class="label">RSS Sources</span><span>${s.rss_sources}</span></div>
-    <div class="row">&nbsp;</div>
-    <div class="row"><span class="label">Edge Threshold</span><span>&gt;= ${(s.edge_threshold * 100).toFixed(0)}%</span></div>
-    <div class="row"><span class="label">Max Bet</span><span>$${s.max_bet.toFixed(2)}</span></div>
-    <div class="row"><span class="label">Daily Limit</span><span>$${s.daily_limit.toFixed(2)}</span></div>
-    <div class="row"><span class="label">Mode</span><span class="${data.mode === 'LIVE' ? 'win' : 'warn'}">${data.mode}</span></div>
+    <div class="row"><span class="label">Pipeline${infoIcon('pipeline_status', 'Pipeline')}</span><span class="${s.pipeline_status === 'SCANNING' ? 'warn' : 'win'}">${s.pipeline_status}</span></div>
+    <div class="row"><span class="label">Model${infoIcon('model', 'Model')}</span><span>${s.openai_model}</span></div>
+    <div class="row"><span class="label">Scan Cycle${infoIcon('scan_cycle', 'Scan Cycle')}</span><span>${s.scan_cycle ?? "—"}</span></div>
+    <div class="row"><span class="label">Activity${infoIcon('activity', 'Activity')}</span><span class="dim">${s.activity}</span></div>
+    <div class="row"><span class="label">Markets Scanned${infoIcon('markets_scanned', 'Markets Scanned')}</span><span>${s.markets_scanned ?? "—"}</span></div>
+    <div class="row"><span class="label">Headlines Found${infoIcon('headlines_found', 'Headlines Found')}</span><span>${s.headlines_found ?? "—"}</span></div>
+    <div class="row"><span class="label">Tweets Today${infoIcon('tweets_today', 'Tweets Today')}</span><span>${s.tweets_today ?? "—"}${s.tweets_cap ? ` / ${s.tweets_cap}` : ""}</span></div>
+    <div class="row"><span class="label">RSS Today${infoIcon('rss_today', 'RSS Today')}</span><span>${s.rss_today ?? "—"}</span></div>
+    <div class="row"><span class="label">Signals / Trades${infoIcon('signals_trades', 'Signals / Trades')}</span><span>${s.signals ?? "—"} / ${s.trades ?? "—"}</span></div>
+    <div class="row"><span class="label">Twitter Sources${infoIcon('twitter_sources', 'Twitter Sources')}</span><span>${s.twitter_sources}</span></div>
+    <div class="row"><span class="label">RSS Sources${infoIcon('rss_sources', 'RSS Sources')}</span><span>${s.rss_sources}</span></div>
+    <div class="row"><span class="label">Edge Threshold${infoIcon('edge_threshold', 'Edge Threshold')}</span><span>&gt;= ${(s.edge_threshold * 100).toFixed(0)}%</span></div>
+    <div class="row"><span class="label">Max Bet${infoIcon('max_bet', 'Max Bet')}</span><span>$${s.max_bet.toFixed(2)}</span></div>
+    <div class="row"><span class="label">Daily Limit${infoIcon('daily_limit', 'Daily Limit')}</span><span>$${s.daily_limit.toFixed(2)}</span></div>
+    <div class="row"><span class="label">Mode${infoIcon('trading_mode', 'Mode')}</span><span class="${data.mode === 'LIVE' ? 'win' : 'warn'}">${data.mode}</span></div>
   `;
 
   const p = data.portfolio;
@@ -299,20 +374,17 @@ function render(data) {
   const pnlKnown = p.open_pnl_usd !== null;
   const syncedTitle = p.portfolio_updated_at ? `Last checked ${p.portfolio_updated_at}` : "Not yet checked";
   document.getElementById("portfolio").innerHTML = `
-    <div class="row"><span class="label" title="${syncedTitle}">Balance</span><span class="${balanceKnown ? 'win' : 'dim'}">${balanceKnown ? "$" + p.balance_usd.toFixed(2) : "—"}</span></div>
-    <div class="row"><span class="label" title="${syncedTitle}">Open P&amp;L</span><span class="${!pnlKnown ? 'dim' : (p.open_pnl_usd >= 0 ? 'win' : 'loss')}">${pnlKnown ? (p.open_pnl_usd >= 0 ? "+" : "") + "$" + p.open_pnl_usd.toFixed(2) : "—"}</span></div>
-    <div class="row">&nbsp;</div>
-    <div class="row"><span class="label">Total Signals</span><span class="win">${p.total_signals}</span></div>
-    <div class="row"><span class="label">Dry Runs</span><span class="warn">${p.dry_runs}</span></div>
-    <div class="row"><span class="label">Executed</span><span class="win">${p.executed}</span></div>
-    ${p.errors ? `<div class="row"><span class="label">Errors</span><span class="loss">${p.errors}</span></div>` : ""}
-    <div class="row">&nbsp;</div>
-    <div class="row"><span class="label">Daily Exposure</span><span class="win">$${p.daily_exposure.toFixed(2)}</span></div>
-    <div class="row"><span class="label">Total Wagered</span><span class="win">$${p.total_wagered.toFixed(2)}</span></div>
-    <div class="row"><span class="label">Avg Edge</span><span class="win">${p.avg_edge.toFixed(1)}%</span></div>
-    ${p.best_edge !== null ? `<div class="row"><span class="label">Best Edge</span><span class="win">${(p.best_edge * 100).toFixed(1)}%</span></div>` : ""}
-    <div class="row">&nbsp;</div>
-    <div class="row"><span class="label">Classified (24h)</span><span class="win">${p.classified_24h}</span></div>
+    <div class="row"><span class="label" title="${syncedTitle}">Balance${infoIcon('balance', 'Balance')}</span><span class="${balanceKnown ? 'win' : 'dim'}">${balanceKnown ? "$" + p.balance_usd.toFixed(2) : "—"}</span></div>
+    <div class="row"><span class="label" title="${syncedTitle}">Open P&amp;L${infoIcon('open_pnl', 'Open P&L')}</span><span class="${!pnlKnown ? 'dim' : (p.open_pnl_usd >= 0 ? 'win' : 'loss')}">${pnlKnown ? (p.open_pnl_usd >= 0 ? "+" : "") + "$" + p.open_pnl_usd.toFixed(2) : "—"}</span></div>
+    <div class="row"><span class="label">Total Signals${infoIcon('total_signals', 'Total Signals')}</span><span class="win">${p.total_signals}</span></div>
+    <div class="row"><span class="label">Dry Runs${infoIcon('dry_runs', 'Dry Runs')}</span><span class="warn">${p.dry_runs}</span></div>
+    <div class="row"><span class="label">Executed${infoIcon('executed', 'Executed')}</span><span class="win">${p.executed}</span></div>
+    ${p.errors ? `<div class="row"><span class="label">Errors${infoIcon('errors', 'Errors')}</span><span class="loss">${p.errors}</span></div>` : ""}
+    <div class="row"><span class="label">Daily Exposure${infoIcon('daily_exposure', 'Daily Exposure')}</span><span class="win">$${p.daily_exposure.toFixed(2)}</span></div>
+    <div class="row"><span class="label">Total Wagered${infoIcon('total_wagered', 'Total Wagered')}</span><span class="win">$${p.total_wagered.toFixed(2)}</span></div>
+    <div class="row"><span class="label">Avg Edge${infoIcon('avg_edge', 'Avg Edge')}</span><span class="win">${p.avg_edge.toFixed(1)}%</span></div>
+    ${p.best_edge !== null ? `<div class="row"><span class="label">Best Edge${infoIcon('best_edge', 'Best Edge')}</span><span class="win">${(p.best_edge * 100).toFixed(1)}%</span></div>` : ""}
+    <div class="row"><span class="label">Classified (24h)${infoIcon('classified_24h', 'Classified (24h)')}</span><span class="win">${p.classified_24h}</span></div>
     ${p.top_rejection_reasons.map(r => `<div class="row"><span class="label dim">&nbsp;&nbsp;${r.label}</span><span class="dim">${r.count}</span></div>`).join("")}
   `;
 
@@ -577,6 +649,7 @@ def _build_polling_payload() -> dict:
             "daily_limit": config.DAILY_LOSS_LIMIT_USD,
             "tweets_today": None,
             "tweets_cap": None,
+            "rss_today": None,
         },
         "portfolio": _portfolio_snapshot(),
         "scanner_rows": scanner_rows,
@@ -650,6 +723,7 @@ def _build_attached_payload(pipeline) -> dict:
             "daily_limit": config.DAILY_LOSS_LIMIT_USD,
             "tweets_today": pipeline.news_aggregator.twitter.tweets_processed_today,
             "tweets_cap": pipeline.news_aggregator.twitter.daily_tweet_cap,
+            "rss_today": pipeline.news_aggregator.rss_items_processed_today,
         },
         "portfolio": _portfolio_snapshot(),
         "scanner_rows": scanner_rows,

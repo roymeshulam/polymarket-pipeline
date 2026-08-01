@@ -9,8 +9,8 @@ TERMINAL_DASHBOARD_SOURCE = (ROOT / "dashboard.py").read_text(encoding="utf-8")
 
 
 def test_web_dashboard_shows_model_directly_below_pipeline():
-    pipeline_row = '<span class="label">Pipeline</span>'
-    model_row = '<span class="label">Model</span><span>${s.openai_model}</span>'
+    pipeline_row = "Pipeline${infoIcon('pipeline_status', 'Pipeline')}</span>"
+    model_row = "Model${infoIcon('model', 'Model')}</span><span>${s.openai_model}</span>"
 
     assert WEB_DASHBOARD_SOURCE.index(model_row) > WEB_DASHBOARD_SOURCE.index(
         pipeline_row

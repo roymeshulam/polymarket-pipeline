@@ -448,6 +448,20 @@ class RSSStream:
     def __init__(self, profile: SourceProfile):
         self.profile = profile
         self._seen: set[str] = set()
+        self._items_today = 0
+        self._count_day = datetime.now(timezone.utc).date()
+
+    def _reset_daily_count_if_new_day(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        if self._count_day != today:
+            self._count_day = today
+            self._items_today = 0
+
+    @property
+    def items_processed_today(self) -> int:
+        """New RSS items digested since UTC midnight (resets daily)."""
+        self._reset_daily_count_if_new_day()
+        return self._items_today
 
     async def stream(self, queue: asyncio.Queue) -> None:
         while True:
@@ -460,6 +474,8 @@ class RSSStream:
                     if key in self._seen:
                         continue
                     self._seen.add(key)
+                    self._reset_daily_count_if_new_day()
+                    self._items_today += 1
                     await queue.put(
                         _event_from_profile(
                             self.profile,
@@ -508,6 +524,11 @@ class NewsAggregator:
             "low_relevance": 0,
             "unconfirmed": 0,
         }
+
+    @property
+    def rss_items_processed_today(self) -> int:
+        """Total new RSS items digested across all feeds since UTC midnight."""
+        return sum(stream.items_processed_today for stream in self.rss_streams)
 
     async def run(self) -> None:
         tasks = [
