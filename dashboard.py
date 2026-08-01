@@ -288,12 +288,21 @@ def render_performance() -> Panel:
     return Panel(table, title="[bold]PERFORMANCE[/bold]", border_style="bright_cyan", box=box.ROUNDED)
 
 
+def _format_volume(volume: float) -> str:
+    if volume >= 1_000_000:
+        return f"${volume / 1_000_000:.1f}M"
+    if volume >= 1_000:
+        return f"${volume / 1_000:.0f}k"
+    return f"${volume:.0f}"
+
+
 def render_scanner(compact: bool = False) -> Panel:
     title = "[bold]MARKET SCANNER[/bold]" if compact else "[bold]MARKET SCANNER[/bold]  ·  Model Confidence vs Market Odds"
     market_width = 20 if compact else 38
     content = Table(show_header=True, box=box.SIMPLE_HEAD, expand=True, padding=(0, 1))
     content.add_column("Market", max_width=market_width, no_wrap=True, overflow="ellipsis")
     if not compact:
+        content.add_column("Vol", justify="right", width=6)
         content.add_column("Mkt$", justify="right", width=5)
         content.add_column("Model", justify="right", width=6, style=ACCENT)
     content.add_column("Edge", justify="right", width=6)
@@ -301,7 +310,7 @@ def render_scanner(compact: bool = False) -> Panel:
     content.add_column("Bet", justify="right", width=7)
     content.add_column("Status", justify="center", width=9)
 
-    blank_row = ["", "", "", ""] if compact else ["", "", "", "", "", ""]
+    blank_row = ["", "", "", ""] if compact else ["", "", "", "", "", "", ""]
 
     if not state.latest_markets:
         content.add_row(f"[{DIM}]Waiting for first scan...[/{DIM}]", *blank_row)
@@ -332,7 +341,7 @@ def render_scanner(compact: bool = False) -> Panel:
 
             row = [m.question[:market_width]]
             if not compact:
-                row += [f"{m.yes_price:.2f}", f"{s['confidence']:.2f}"]
+                row += [_format_volume(m.volume), f"{m.yes_price:.2f}", f"{s['confidence']:.2f}"]
             row += [
                 f"[{WIN}]{edge_pct}[/{WIN}]",
                 f"[{side_style}]{t['side']}[/{side_style}]",
@@ -345,7 +354,11 @@ def render_scanner(compact: bool = False) -> Panel:
             reason_label = REASON_LABELS.get(score.get("reason", ""), "no data")
             row = [f"[{DIM}]{m.question[:market_width]}[/{DIM}]"]
             if not compact:
-                row += [f"[{DIM}]{m.yes_price:.2f}[/{DIM}]", f"[{DIM}]{confidence:.2f}[/{DIM}]"]
+                row += [
+                    f"[{DIM}]{_format_volume(m.volume)}[/{DIM}]",
+                    f"[{DIM}]{m.yes_price:.2f}[/{DIM}]",
+                    f"[{DIM}]{confidence:.2f}[/{DIM}]",
+                ]
             row += [
                 f"[{DIM}]{edge:.0%}[/{DIM}]",
                 f"[{DIM}]—[/{DIM}]",

@@ -17,7 +17,7 @@ import config
 import executor
 import logger
 import markets
-from dashboard import state, run_scan_cycle
+from dashboard import state, run_scan_cycle, _format_volume
 from edge import REASON_LABELS
 from matcher import CoverageGap, find_coverage_gaps
 from source_config import profiles_by_kind
@@ -332,6 +332,14 @@ const INFO_TEXT = {
   avg_edge: "Average fair-probability edge across recent signals.",
   best_edge: "The largest fair-probability edge seen among recent signals.",
   classified_24h: "Number of news events run through the resolution classifier in the last 24 hours, broken down below by why non-signals were rejected.",
+  scanner_market: "The Polymarket question being tracked. Click to open the market on Polymarket.",
+  scanner_volume: "Total trading volume on this market, used to pick the top 10 markets shown here.",
+  scanner_mkt: "The market's current YES price — the crowd's implied probability of a YES resolution.",
+  scanner_model: "The classification model's estimated fair probability of a YES resolution, based on matched news.",
+  scanner_edge: "The absolute gap between the model's fair probability and the market's YES price.",
+  scanner_side: "Which side (YES/NO) a detected signal would trade, if any.",
+  scanner_bet: "The USD size of the trade a detected signal would place, if any.",
+  scanner_status: "Whether a detected signal was a real order (FILLED), a logged-only dry run (DRY RUN), or — for rows with no signal — why one wasn't generated.",
 };
 function infoIcon(key, label) {
   return `<i class="info-icon" onclick="showInfo('${key}', '${label.replace(/'/g, "\\'")}')" title="What is this?">i</i>`;
@@ -393,11 +401,12 @@ function render(data) {
 
   let scannerRows = "";
   if (!data.scanner_rows.length) {
-    scannerRows = `<tr><td class="dim empty" colspan="7">Waiting for first scan...</td></tr>`;
+    scannerRows = `<tr><td class="dim empty" colspan="8">Waiting for first scan...</td></tr>`;
   } else {
     scannerRows = data.scanner_rows.map(r => `
       <tr class="${r.is_signal ? '' : 'dim'}">
         <td data-label="Market">${marketCell(r.question, r.url)}</td>
+        <td data-label="Vol" class="num">${r.volume}</td>
         <td data-label="Mkt$" class="num">${r.mkt_price.toFixed(2)}</td>
         <td data-label="Model" class="num win">${r.model_confidence.toFixed(2)}</td>
         <td data-label="Edge" class="num ${r.is_signal ? 'win' : ''}">${(r.edge * 100).toFixed(0)}%</td>
@@ -409,7 +418,16 @@ function render(data) {
   document.getElementById("scanner").innerHTML = `
     <div class="table-scroll">
     <table>
-      <tr><th>Market</th><th class="num">Mkt$</th><th class="num">Model</th><th class="num">Edge</th><th class="center">Side</th><th class="num">Bet</th><th class="center">Status</th></tr>
+      <tr>
+        <th>Market${infoIcon('scanner_market', 'Market')}</th>
+        <th class="num">Vol${infoIcon('scanner_volume', 'Volume')}</th>
+        <th class="num">Mkt$${infoIcon('scanner_mkt', 'Mkt$')}</th>
+        <th class="num">Model${infoIcon('scanner_model', 'Model')}</th>
+        <th class="num">Edge${infoIcon('scanner_edge', 'Edge')}</th>
+        <th class="center">Side${infoIcon('scanner_side', 'Side')}</th>
+        <th class="num">Bet${infoIcon('scanner_bet', 'Bet')}</th>
+        <th class="center">Status${infoIcon('scanner_status', 'Status')}</th>
+      </tr>
       ${scannerRows}
     </table>
     </div>`;
@@ -606,6 +624,7 @@ def _build_polling_payload() -> dict:
         scanner_rows.append({
             "question": m.question[:60],
             "url": m.url or None,
+            "volume": _format_volume(m.volume),
             "mkt_price": m.yes_price,
             "model_confidence": confidence,
             "edge": sig["score"]["edge"] if sig else score.get("edge", abs(confidence - m.yes_price)),
@@ -670,6 +689,7 @@ def _build_attached_payload(pipeline) -> dict:
         scanner_rows.append({
             "question": m.question[:60],
             "url": m.url or None,
+            "volume": _format_volume(m.volume),
             "mkt_price": m.yes_price,
             "model_confidence": confidence,
             "edge": edge,
