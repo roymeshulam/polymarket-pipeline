@@ -596,6 +596,7 @@ def _build_polling_payload() -> dict:
 
     signals_by_question = {sig["market"].question: sig for sig in state.latest_signals}
     top_markets = sorted(state.latest_markets, key=lambda m: m.volume, reverse=True)[:10]
+    top_markets = sorted(top_markets, key=lambda m: m.yes_price, reverse=True)
 
     scanner_rows = []
     for m in top_markets:
@@ -657,6 +658,7 @@ def _build_attached_payload(pipeline) -> dict:
     tracked = pipeline.market_watcher.tracked_markets
 
     top_markets = sorted(tracked, key=lambda m: m.volume, reverse=True)[:10]
+    top_markets = sorted(top_markets, key=lambda m: m.yes_price, reverse=True)
 
     scanner_rows = []
     for m in top_markets:

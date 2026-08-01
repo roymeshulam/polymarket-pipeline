@@ -307,9 +307,10 @@ def render_scanner(compact: bool = False) -> Panel:
         content.add_row(f"[{DIM}]Waiting for first scan...[/{DIM}]", *blank_row)
         return Panel(content, title=title, border_style="bright_green", box=box.ROUNDED)
 
-    # Top 10 tracked markets by volume, largest first
+    # Top 10 tracked markets by volume, displayed sorted by MKT price, largest first
     signals_by_question = {sig["market"].question: sig for sig in state.latest_signals}
     top_markets = sorted(state.latest_markets, key=lambda m: m.volume, reverse=True)[:10]
+    top_markets = sorted(top_markets, key=lambda m: m.yes_price, reverse=True)
 
     for m in top_markets:
         sig = signals_by_question.get(m.question)
