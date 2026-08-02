@@ -100,6 +100,7 @@ class PipelineV2:
                 received_at=event.received_at.isoformat(),
                 latency_ms=event.latency_ms,
                 matched_markets=len(matched),
+                url=event.url,
             )
 
             if not matched:
@@ -295,6 +296,7 @@ def run_pipeline(
             source=event.source_id or event.source,
             received_at=event.received_at.isoformat(),
             latency_ms=event.latency_ms,
+            url=event.url,
         )
         matched_markets = match_news_to_markets(
             event.headline,

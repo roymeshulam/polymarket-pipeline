@@ -482,7 +482,7 @@ function render(data) {
       <tr>
         <td data-label="Time" class="dim">${h.time}</td>
         <td data-label="Source">${h.source}</td>
-        <td data-label="Headline">${h.headline}</td>
+        <td data-label="Headline">${marketCell(h.headline, h.url)}</td>
       </tr>`).join("");
   }
   document.getElementById("news").innerHTML = `
@@ -636,7 +636,12 @@ def _build_polling_payload() -> dict:
         })
 
     latest_headlines = [
-        {"time": _format_ago(h["age_hours"]), "source": h["source"], "headline": h["headline"]}
+        {
+            "time": _format_ago(h["age_hours"]),
+            "source": h["source"],
+            "headline": h["headline"],
+            "url": h.get("url"),
+        }
         for h in sorted(state.latest_headlines, key=lambda h: h["age_hours"])[:10]
     ]
 
@@ -713,6 +718,7 @@ def _build_attached_payload(pipeline) -> dict:
             "time": _format_ago((now - e["_received_dt"]).total_seconds() / 3600),
             "source": e["source"],
             "headline": e["headline"],
+            "url": e.get("url"),
         }
         for e in recent_events
     ]

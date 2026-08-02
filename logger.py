@@ -70,6 +70,7 @@ def init_db():
             latency_ms INTEGER,
             matched_markets INTEGER DEFAULT 0,
             triggered_trades INTEGER DEFAULT 0,
+            url TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
@@ -128,6 +129,7 @@ def init_db():
     # Add columns to databases created by earlier versions.
     _migrate_v2_columns(conn)
     _migrate_market_trade_lock_columns(conn)
+    _migrate_news_event_columns(conn)
     conn.close()
 
 
@@ -160,6 +162,14 @@ def _migrate_market_trade_lock_columns(conn):
         conn.execute(
             "ALTER TABLE market_trade_locks ADD COLUMN exposure_reservation_id INTEGER"
         )
+    conn.commit()
+
+
+def _migrate_news_event_columns(conn):
+    """Add the source URL column introduced after the initial table release."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(news_events)").fetchall()}
+    if "url" not in columns:
+        conn.execute("ALTER TABLE news_events ADD COLUMN url TEXT")
     conn.commit()
 
 
@@ -215,13 +225,14 @@ def log_news_event(
     latency_ms: int = 0,
     matched_markets: int = 0,
     triggered_trades: int = 0,
+    url: str | None = None,
 ) -> int:
     conn = _conn()
     cur = conn.execute(
         """INSERT INTO news_events
-           (headline, source, received_at, latency_ms, matched_markets, triggered_trades)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (headline, source, received_at, latency_ms, matched_markets, triggered_trades),
+           (headline, source, received_at, latency_ms, matched_markets, triggered_trades, url)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (headline, source, received_at, latency_ms, matched_markets, triggered_trades, url),
     )
     event_id = cur.lastrowid
     if event_id is None:
