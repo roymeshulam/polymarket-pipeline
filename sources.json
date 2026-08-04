@@ -685,9 +685,9 @@
       "max_age_seconds": 600,
       "poll_interval_seconds": 60,
       "relevance": 0.7,
-      "trust_tier": 3,
+      "trust_tier": 2,
       "min_confirmations": 2,
-      "allow_live": false,
+      "allow_live": true,
       "topics": ["israel", "politics", "security", "news"]
     }
   ]
