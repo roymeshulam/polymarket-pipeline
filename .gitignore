@@ -1,4 +1,5 @@
 .env
+sources.json
 trades.db
 trades.db-shm
 trades.db-wal
