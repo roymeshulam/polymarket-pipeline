@@ -58,3 +58,12 @@ def test_converts_no_token_price_to_yes_price():
 
     assert watcher.snapshots["condition"].last_price == 0.35
     assert watcher.stats["price_updates"] == 1
+
+
+def test_websocket_allows_large_initial_market_snapshots():
+    watcher = MarketWatcher()
+
+    options = watcher._websocket_connect_options()
+
+    assert options["ping_interval"] is None
+    assert options["max_size"] >= 8 * 1024 * 1024

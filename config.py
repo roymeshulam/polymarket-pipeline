@@ -19,6 +19,9 @@ POLYMARKET_SIGNATURE_TYPE = int(_signature_type or "-1")
 LIVE_TRADING_ACK = os.getenv("LIVE_TRADING_ACK", "")
 POLYMARKET_HOST = "https://clob.polymarket.com"
 POLYMARKET_WS_HOST = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+POLYMARKET_WS_MAX_SIZE_BYTES = int(
+    os.getenv("POLYMARKET_WS_MAX_SIZE_BYTES", str(8 * 1024 * 1024))
+)
 POLYMARKET_CHAIN_ID = 137
 
 # --- Ingestion credentials ---

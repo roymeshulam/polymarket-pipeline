@@ -116,7 +116,7 @@ class MarketWatcher:
             try:
                 async with websockets.connect(
                     config.POLYMARKET_WS_HOST,
-                    ping_interval=None,
+                    **self._websocket_connect_options(),
                 ) as ws:
                     self._ws_connected = True
                     log.info("[watcher] WebSocket connected")
@@ -159,6 +159,12 @@ class MarketWatcher:
                 self._ws_connected = False
                 log.warning(f"[watcher] WebSocket error: {e}, reconnecting in 5s")
                 await asyncio.sleep(5)
+
+    def _websocket_connect_options(self) -> dict:
+        return {
+            "ping_interval": None,
+            "max_size": config.POLYMARKET_WS_MAX_SIZE_BYTES,
+        }
 
     def _handle_ws_message(self, data: dict):
         """Process a WebSocket price update."""
