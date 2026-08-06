@@ -158,3 +158,31 @@ def test_find_coverage_gaps_ignores_fully_covered_market():
     )
 
     assert find_coverage_gaps([market]) == []
+
+
+def test_leadership_ouster_predicate_covers_secretary_general_market():
+    market = Market(
+        "condition",
+        "Naim Qassem out as Hezbollah's secretary-general by December 31, 2026?",
+        "geopolitics",
+        0.5,
+        0.5,
+        10_000,
+        "",
+        True,
+        [],
+    )
+
+    assert find_coverage_gaps([market]) == []
+
+
+def test_internet_blackout_predicate_covers_iran_market():
+    market = _market("Total Internet Blackout in Iran by August 31, 2026?")
+
+    assert find_coverage_gaps([market]) == []
+
+
+def test_pardon_predicate_covers_netanyahu_market():
+    market = _market("Will Netanyahu be pardoned by December 31?")
+
+    assert find_coverage_gaps([market]) == []
